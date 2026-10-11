@@ -27,8 +27,20 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品名 **Artemis**（可执�
 | 工具定义与绑定 | `agent/toolcatalog.go`、`agent/tools*.go`、`server/orchestration.go` |
 | 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go`（`Repo` 占位值） |
 | 产品命名 | 品牌串只在 `web/src/config/app-config.ts`、登录/初始化页、侧边栏、`cmd/artex/main.go` 的 banner 与日志；二进制与包名在 `build.bat`、`build.sh`、`start.bat`、`start.sh`、`Dockerfile`、`scripts/package-release.ps1` |
+| 工具库 | `server/toollib.go`（清单与导入）、`server/toollib_upload.go`（上传）、`server/toollib_check.go`（自检）、`server/toollib_command.go`（审计用命令渲染）、`web/src/app/(main)/system/tool-lib/page.tsx` |
 
 提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`。
+
+## 工具库（data/tools）
+
+运行时武器库的**真源是磁盘**：`data/tools/` 下的文件 + `manifest.json`。约定不要破坏：
+
+- **单向同步**：导入（页面按钮 / 上传）把清单条目 upsert 成 `tools` 表里 `kind=command` 的自定义工具行；在「系统 → 工具」编辑工具**不回写**清单。反向写会让两边都能当权威，早晚漂移。
+- **只告警不阻断**：文件缺失、sha256 不符、runtime 未安装只在自检结果与启动日志里标出，不阻止启动、也不阻止其它条目导入（武器库不全时平台仍要能跑）。
+- **执行层零改动**：`kind=command` 复用 Bash 底层 run，所以脚本（python3/node/php）、JAR、原生二进制都靠命令模板包装，不需要给执行器新增 runtime 分支。模板里的路径是**导入时渲染的绝对路径**——移动 data 目录后重新导入即可修复。
+- **清单条目不写 agents 时默认绑全部 agent**：没有任何绑定的自定义工具对每个 agent 都不可见（见 `server/assembly.go` 的 `ToolResolve`）。
+- **审计可见性**：自定义 command 工具以自身 key 被调用，guard 从输入里读不到命令行，靠 `intercept.CommandRenderer`（`server/toollib_command.go` 接线）渲染出真实命令写进审计，并以 `_command` 合并进规则匹配的输入。新增模板型工具类型时别绕开这条链路。
+- 清单位于 `data/`（运行数据），不进发布包、不进 git；`manifest.json.bak` 是上一版备份。
 
 ## 验证与发布
 

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,27 +56,60 @@ func newGuard(ic *intercept.Interceptor) *Guard {
 func (g *Guard) Hooks() *hook.Registry { return g.reg }
 
 func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
-	// Extract the shell-command surface for the audit log: Bash + the interactive-shell
-	// tools (shell_open's command, shell_send's text). Destructive/exfil gating is no
-	// longer hard-coded here — it now lives in the DB intercept rules, evaluated by
-	// applyIntercept below. Other tools record an empty command.
-	var cmd string
+	cmd, input := g.commandSurface(ev)
+	ev.Input = input
+	g.record(ev.ToolName, "allow", "", cmd)
+	return g.applyIntercept(ctx, ev)
+}
+
+// commandSurface returns the command to record for this call (for the audit log) plus
+// the input the intercept rules should see — usually the original one.
+//
+// Bash 与交互式 shell 工具的命令行直接写在输入里；**其它工具**（自定义工具、工具库
+// 导入的 kind=command 工具、以及将来任何模板型工具）以自身 key 被调用，模板 + 参数
+// 拼出来的命令行在输入里看不到。这类工具交给平台渲染器：它返回真正要执行的命令，
+// 我们把它以 "_command" 合并进输入，于是审计、tool_input 规则、模型兜底裁判与审批
+// 记录看到的是同一条命令，而不是一片空白的参数 JSON。
+func (g *Guard) commandSurface(ev hook.Event) (string, []byte) {
 	switch ev.ToolName {
 	case "Bash", "shell_open":
 		var in struct {
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(ev.Input, &in)
-		cmd = in.Command
+		return in.Command, ev.Input
 	case "shell_send":
 		var in struct {
 			Text string `json:"text"`
 		}
 		_ = json.Unmarshal(ev.Input, &in)
-		cmd = in.Text
+		return in.Text, ev.Input
 	}
-	g.record(ev.ToolName, "allow", "", cmd)
-	return g.applyIntercept(ctx, ev)
+	if g.interceptor != nil {
+		if rendered := strings.TrimSpace(g.interceptor.RenderCommand(ev.ToolName, ev.Input)); rendered != "" {
+			return rendered, withCommandInput(ev.Input, rendered)
+		}
+	}
+	return "", ev.Input
+}
+
+// withCommandInput merges the rendered command into a tool input object under
+// "_command", so tool_input intercept rules and the review/approval record see what
+// will actually run. Non-object inputs pass through untouched.
+func withCommandInput(input []byte, cmd string) []byte {
+	var m map[string]any
+	if len(input) == 0 || json.Unmarshal(input, &m) != nil || m == nil {
+		return input
+	}
+	if _, exists := m["_command"]; exists {
+		return input
+	}
+	m["_command"] = cmd
+	out, err := json.Marshal(m)
+	if err != nil {
+		return input
+	}
+	return out
 }
 
 // applyIntercept evaluates user-configured intercept rules against the tool call.

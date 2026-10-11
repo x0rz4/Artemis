@@ -128,14 +128,46 @@ type Interceptor struct {
 	cached       []compiledRule  // sorted by priority DESC; nil means not loaded yet
 	enabledTools map[string]bool // nil means not loaded yet
 	pending      *pendingManager
-	reviewer     Reviewer // nil = LLM fallback judge not wired
+	reviewer     Reviewer        // nil = LLM fallback judge not wired
+	renderer     CommandRenderer // nil = 无法渲染自定义工具的命令行
 }
+
+// CommandRenderer 渲染「非 shell 工具即将执行的命令」。自定义 command 工具以自身 key
+// 出现在工具调用里，guard 从 Input 里读不到模板与参数拼出来的命令行；平台通过
+// SetCommandRenderer 把这个渲染器接进来，审计的 command 字段与 tool_input 规则才能
+// 看到真正要跑的命令。返回 "" 表示这条调用不是渲染型工具。
+type CommandRenderer func(toolName string, input []byte) string
 
 // SetReviewer installs the LLM fallback judge callback. Passing nil disables it.
 func (i *Interceptor) SetReviewer(r Reviewer) {
 	i.mu.Lock()
 	i.reviewer = r
 	i.mu.Unlock()
+}
+
+// SetCommandRenderer installs the command renderer. Passing nil disables it.
+func (i *Interceptor) SetCommandRenderer(r CommandRenderer) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.renderer = r
+	i.mu.Unlock()
+}
+
+// RenderCommand returns the concrete command a non-shell tool is about to run
+// ("" when no renderer is wired or the tool is not a rendered-command tool).
+func (i *Interceptor) RenderCommand(toolName string, input []byte) string {
+	if i == nil {
+		return ""
+	}
+	i.mu.RLock()
+	r := i.renderer
+	i.mu.RUnlock()
+	if r == nil {
+		return ""
+	}
+	return r(toolName, input)
 }
 
 // defaultEnabledTools is the hard-coded set of tools that enter the intercept

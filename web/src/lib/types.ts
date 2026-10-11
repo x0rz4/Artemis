@@ -1240,6 +1240,75 @@ export interface Tool {
   calls?: number; // persistent runtime invocation count (older APIs may omit it)
 }
 
+// ---- 工具库（data/tools 清单）----
+export interface ToolLibCheck {
+  name: string;
+  tool_key: string;
+  path: string;
+  kind: string;
+  runtime: string;
+  resolved?: string;
+  exists: boolean;
+  is_dir?: boolean;
+  size?: number;
+  sha256_state: "ok" | "mismatch" | "unpinned" | "missing" | "skipped";
+  runtime_ok: boolean;
+  runtime_path?: string;
+  problem?: string;
+}
+
+export interface ToolLibSummary {
+  total: number;
+  missing: number;
+  mismatch: number;
+  unpinned: number;
+  runtime_missing: number;
+  items: ToolLibCheck[];
+}
+
+export interface ToolSource {
+  name: string;
+  type: "github" | "http" | string;
+  repo?: string;
+  path?: string;
+  branch?: string;
+  url?: string;
+}
+
+export interface ToolLibEntry {
+  name: string;
+  key: string;
+  path: string;
+  kind?: string;
+  runtime?: string;
+  entry?: string;
+  purpose?: string;
+  version?: string;
+  platform?: string;
+  category?: string;
+  source?: string;
+  sha256?: string;
+  registered: boolean;
+  agents?: string[];
+  enabled?: boolean;
+  check: ToolLibCheck;
+}
+
+export interface ToolLib {
+  dir: string;
+  manifest: string;
+  version: string;
+  updated_at?: string;
+  sources: ToolSource[];
+  tools: ToolLibEntry[];
+  summary: ToolLibSummary;
+}
+
+export interface ToolLibImportResult {
+  imported: number;
+  results: { name: string; key?: string; created: boolean; error?: string }[];
+}
+
 // ---- Stats ----
 export interface Stats {
   assets: number;

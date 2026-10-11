@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 )
 
 // Tool is one row of the built-in tool catalog. key + handler live in code; this
@@ -195,6 +196,52 @@ WHERE key=$1 AND system=false`,
 func (d *DB) DeleteCustomTool(key string) error {
 	_, err := d.Exec(`DELETE FROM tools WHERE key=$1 AND system=false`, key)
 	return err
+}
+
+// UpsertLibraryTool inserts or refreshes a custom tool row imported from the tools
+// library (data/tools/manifest.json + 页面导入)。与 CreateCustomTool 的区别是幂等，
+// 与 UpdateCustomTool 的区别是能创建行。
+//
+// overwriteBinding=false 时保留行上已有的 agents/enabled：清单拥有工具的**定义**
+// (description/schema/exec)，而 agent 绑定是用户可能在页面上改过的平台状态。
+// system=true 的内置工具永远不会被碰——清单条目与内置 key 撞车时直接报错，
+// 避免一次导入把内置工具顶掉。
+func (d *DB) UpsertLibraryTool(t *Tool, overwriteBinding bool) (created bool, err error) {
+	schema := t.Schema
+	if len(schema) == 0 {
+		schema = json.RawMessage("{}")
+	}
+	exec := t.Exec
+	if len(exec) == 0 {
+		exec = json.RawMessage("{}")
+	}
+	agents, _ := json.Marshal(t.Agents)
+	if len(agents) == 0 {
+		agents = json.RawMessage("[]")
+	}
+	row := d.QueryRow(`
+INSERT INTO tools(key, system, description, schema, agents, enabled, kind, exec, deferred)
+VALUES ($1, false, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (key) DO UPDATE
+   SET description = EXCLUDED.description,
+       schema      = EXCLUDED.schema,
+       kind        = EXCLUDED.kind,
+       exec        = EXCLUDED.exec,
+       deferred    = EXCLUDED.deferred,
+       agents      = CASE WHEN $9 THEN EXCLUDED.agents  ELSE tools.agents  END,
+       enabled     = CASE WHEN $9 THEN EXCLUDED.enabled ELSE tools.enabled END,
+       updated_at  = now()
+ WHERE tools.system = false
+RETURNING (xmax = 0)`,
+		t.Key, t.Description, schema, agents, t.Enabled, t.Kind, exec, t.Deferred, overwriteBinding)
+	if scanErr := row.Scan(&created); scanErr != nil {
+		if scanErr == sql.ErrNoRows {
+			// DO UPDATE ... WHERE 对内置工具不生效，也不会报错，于是这里没有返回行。
+			return false, fmt.Errorf("key %s 已是内置工具，未导入", t.Key)
+		}
+		return false, scanErr
+	}
+	return created, nil
 }
 
 // ListCustomTools returns only the user-defined (system=false) tools.

@@ -92,6 +92,9 @@ import type {
   TokenTotal,
   TokenUsage,
   Tool,
+  ToolLib,
+  ToolLibImportResult,
+  ToolLibSummary,
   ToolStat,
   TrafficDetail,
   TrafficEvidenceRef,
@@ -1079,6 +1082,33 @@ export const api = {
   testCustomTool: (body: { kind: string; exec: Record<string, unknown>; params: Record<string, unknown> }) =>
     post<{ output: string; is_error: boolean }>("/tools/custom/test", body),
   detectPython: () => post<{ python_interpreter: string }>("/settings/python/detect", {}),
+
+  // ---- 工具库（data/tools：清单为真源，导入后成为 kind=command 的自定义工具）----
+  toolLib: () => get<ToolLib>("/tool-lib"),
+  toolLibCheck: () => post<ToolLibSummary>("/tool-lib/check", {}),
+  toolLibImport: (names?: string[]) => post<ToolLibImportResult>("/tool-lib/import", names?.length ? { names } : {}),
+  // uploadTool 支持单文件（binary/script/jar）与 zip（目录型工具）。返回后端已落地的
+  // 条目与注册出的工具 key；错误文本（已存在/缺少入口文件）原样带给调用方。
+  uploadTool: async (
+    file: File,
+    opts: { name?: string; kind?: string; runtime?: string; entry?: string; purpose?: string; version?: string; agents?: string },
+    overwrite = false,
+  ): Promise<{ name: string; key: string; path: string; kind?: string; created: boolean }> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    for (const [k, v] of Object.entries(opts)) if (v) fd.append(k, v);
+    const token = getToken();
+    const r = await fetch(`/api/tool-lib/upload${overwrite ? "?overwrite=true" : ""}`, {
+      method: "POST",
+      body: fd,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body?.error || `上传失败(${r.status})`);
+    return body;
+  },
+  deleteToolLibEntry: (name: string, purge = false) =>
+    del<{ deleted: string; key?: string }>(`/tool-lib/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`),
 
   // ---- mcp ----
   mcpServers: () => get<{ servers: MCPServer[] }>("/mcp").then((r) => arr(r.servers)),

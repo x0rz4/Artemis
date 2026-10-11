@@ -265,6 +265,8 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
+	s.wireCommandRenderer()   // 自定义 command 工具在审计/规则匹配里的真实命令行
+	s.ensureToolLib()         // data/tools 清单骨架 + 启动自检（只告警，不阻断）
 	return s
 }
 
@@ -886,6 +888,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/tools/custom/{key}", s.pgDeleteCustomTool)
 	mux.HandleFunc("POST /api/settings/python/detect", s.pgDetectPython)
 	mux.HandleFunc("POST /api/tools/{key}/reset", s.pgResetTool)
+	// 工具库：data/tools 下的文件 + manifest.json 是**真源**，导入动作把它注册成
+	// kind=command 的自定义工具（复用上面的执行链路）。见 server/toollib.go。
+	mux.HandleFunc("GET /api/tool-lib", s.tlList)
+	mux.HandleFunc("POST /api/tool-lib/check", s.tlCheck)
+	mux.HandleFunc("POST /api/tool-lib/import", s.tlImport)
+	mux.HandleFunc("POST /api/tool-lib/upload", s.tlUpload)
+	mux.HandleFunc("DELETE /api/tool-lib/{name}", s.tlDelete)
 	// MCP CRUD
 	mux.HandleFunc("GET /api/mcp", s.pgListMCP)
 	mux.HandleFunc("POST /api/mcp", s.pgSaveMCP)
