@@ -1,0 +1,6 @@
+# Only used by install.sh --mode local --database docker.
+# The base file intentionally never publishes PostgreSQL to the host.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${ARTEX_PG_PORT:-5433}:5432"

@@ -77,12 +77,7 @@ jobs:
         with:
           name: pkg-${{ matrix.goos }}-${{ matrix.goarch }}
           path: "dist/*.zip"
-      # Linux 生二进制单独上传，供 docker job 复用（免在镜像里重编前端+Go）
-      - if: matrix.goos == 'linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bin-linux-${{ matrix.goarch }}
-          path: dist/artemis-linux-${{ matrix.goarch }}/artemis
+      # 容器由 container workflow 从源码独立构建、验证并发布到 GHCR。
 
   # ③ 汇总所有 zip → 创建 GitHub Release
   release:

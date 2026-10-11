@@ -33,6 +33,62 @@ LLM 驱动的自主渗透测试工作台 · Go + Next.js + PostgreSQL
 
 ## 开始使用
 
+### 一键安装（Linux / macOS）
+
+```bash
+git clone https://github.com/x0rz4/Artemis.git
+cd Artemis
+bash install.sh
+```
+
+默认使用 Docker Compose 部署 Artemis 与 PostgreSQL。需要 Docker 和 Compose **2.20 或更新版本**；Linux 缺少 Docker 时可使用 `bash install.sh --install-docker` 安装，macOS 请先启动 Docker Desktop。脚本检测 Docker daemon 权限，首次生成随机数据库密码到权限为 `600` 的 `.env`，已有 `.env` 和 `config.json` 会保留。
+
+```bash
+# 无交互安装；优先拉镜像，拉取失败时从当前源码构建
+bash install.sh --mode docker --yes
+
+# 直接从源码构建镜像（宿主机无需 Go、Node.js）
+bash install.sh --mode docker --build --yes
+
+# 只准备配置和镜像，不启动服务
+bash install.sh --mode docker --no-start --yes
+```
+
+服务通过健康检查后打开 **http://127.0.0.1:8787/setup**，设置管理员密码，再在「系统 → LLM」添加模型。默认 Web 和流量代理端口仅绑定本机；远程访问可在 `.env` 设置 `ARTEX_BIND=0.0.0.0`。Web、代理端口分别由 `ARTEX_PORT`、`ARTEX_PROXY_PORT` 控制。
+
+镜像地址为 `ghcr.io/x0rz4/artemis`，支持 Linux amd64 / arm64。默认 `ARTEX_TAG=latest`，对应已成功发布的稳定版本；首个稳定版本发布前可用 `ARTEX_TAG=edge bash install.sh --yes` 安装 main 分支镜像，或使用 `--build`。Fork 仓库可以在 `.env` 中修改 `ARTEX_IMAGE`。网络受限时，源码构建可通过 `GOPROXY`、`NPM_REGISTRY` 指定自己的依赖源，默认使用官方源。
+
+手动部署与更新：
+
+```bash
+cp .env.example .env
+# 编辑 .env，设置自己的 POSTGRES_PASSWORD（没有默认密码）
+docker compose pull
+docker compose up -d --no-build --wait --wait-timeout 180
+docker compose logs -f artemis
+
+# 更新：先做好备份，再拉取指定标签并重建容器
+docker compose pull artemis
+docker compose up -d --no-build --wait --wait-timeout 180 artemis
+
+# 停止服务，保留数据库卷
+docker compose down
+```
+
+PostgreSQL 业务数据保存在 `pgdata` 卷，工作区、JWT、录制和上传库保存在 `./data`；`./skills` 保留宿主机技能修改。更新需保留这些数据，**不要使用 `docker compose down -v` 删除数据库卷**。容器更新使用 Compose 拉取/重建。
+
+本地编译模式需要 Go（版本见 `go.mod`）、Node.js 22、npm、rsync、Python 3.8+，始终构建内嵌静态前端的 `artemis`：
+
+```bash
+# 交互输入已有 PostgreSQL 参数；编译后前台运行，Ctrl-C 停止
+bash install.sh --mode local
+
+# 由 Compose 提供 PostgreSQL，仅绑定 127.0.0.1:5433
+bash install.sh --mode local --database docker
+```
+
+本地无交互连接已有数据库时，通过 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`、`POSTGRES_SSLMODE` 提供参数，再添加 `--yes`；已有 `ARTEX_PG_DSN` 或 `ARTEX_CONFIG` 按原有优先级使用。`--database docker` 使用 `.env` 内的数据库参数，宿主机端口可用 `ARTEX_PG_PORT` 修改；重跑相同命令会保留配置并启动已有数据库容器。
+
 ### Windows 发行包
 
 1. 用 `scripts/package-release.ps1` 生成 Windows amd64 zip（见[从源码构建](#从源码构建)），解压到新的目录。
@@ -87,7 +143,22 @@ cp config.example.json config.json
 
 ### 开发模式
 
-后端 `go run ./cmd/artex`；另一终端进入 `web`，执行 `npm ci`、`npm run dev -- --port 5173`。前端 API 默认反代后端 8787。未配置模型时没有预置模型，也不会自动调用供应商。[开发指南](AGENTS.md) 记录代码入口与配置优先级。
+后端 `go run ./cmd/artex`；另一终端进入 `web`，执行 `npm ci`、`npm run dev -- --port 5173`。前端 API 默认反代后端 8787。未配置模型时没有预置模型，也不会自动调用供应商。[项目约束](spec/PROJECT.md) 记录代码入口与配置优先级。
+
+开发前阅读 [Artemis SPEC](spec/README.md)：所有助手通过 AGENTS.md 与 CLAUDE.md 遵循同一套[工作流](spec/WORKFLOW.md)，代码、界面和文案风格统一维护在[风格规范](spec/STYLE.md)。
+
+## GitHub Actions 镜像发布
+
+[container 工作流](.github/workflows/docker.yml) 在 main 推送、`v*` 标签推送和 PR 时执行，也可在 Actions 页面手动运行。PR 和手动取消 `publish` 时只验证；其余发布到 `ghcr.io/<仓库所有者>/<仓库名小写>`，当前仓库对应 `ghcr.io/x0rz4/artemis`。
+
+- main 构建发布 `edge` 和 `sha-<完整提交哈希>`。
+- `v2.3.0` 这样的稳定标签发布 `v2.3.0`、`2.3.0` 和 `latest`。
+- `v2.3.1-rc.1` 这样的预发布标签只发布对应版本及提交标签，不覆盖 `latest`。
+- 两种架构使用各自原生 runner 构建，分别验证初始化、登录鉴权、空业务/模型列表及容器重建后的持久化。两边通过后才合并发布多架构标签；`build-<运行号>-<尝试号>-<架构>` 为中间镜像标签。
+
+GHCR 使用工作流自带的 `GITHUB_TOKEN` 与 `packages: write`，无需 Docker Hub 账号或额外 Secrets。首次发布后，在 GitHub 包设置中将镜像可见性设为 **Public**，才能匿名拉取；如果包已存在，确认该仓库获得包的 Actions 写权限。保留私有镜像时，安装机器需先 `docker login ghcr.io`。
+
+发行 zip 仍使用独立的 [release 工作流](.github/workflows/release.yml)，手动指定已有版本标签。容器不依赖 zip、宿主机预编译文件或运行数据。安装流程参考 [mhtsec/ARTEX 的 install.sh](https://github.com/mhtsec/ARTEX/blob/main/install.sh)，镜像发布参考其 release 工作流，并适配 Artemis 品牌、GHCR 和现有配置约定。
 
 ## 数据与备份
 

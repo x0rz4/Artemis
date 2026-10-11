@@ -39,6 +39,13 @@ Thumbs.db
 /diting.exe
 /diting-improved.exe
 /artex.exe
+/artemis
+/artemis.exe
+/artemis.new
+/artemis.new.sha256
+/artemis.old
+/artemis.failed
+/artemis.upgrade.json
 /artex-run.log
 # 一键更新在可执行文件旁留下的中间产物（暂存件 / 备份 / 失败版本 / 升级标记）
 /artex.new

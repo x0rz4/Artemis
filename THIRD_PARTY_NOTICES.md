@@ -1,6 +1,7 @@
 # 第三方来源与许可证
 
 - **ARTEX**：基于 https://github.com/Autumn-27/ARTEX 改造，保留 AGPL-3.0 许可证及源码版权声明。Go module 和环境变量沿用兼容名称。
+- **安装与容器构建参考**：https://github.com/mhtsec/ARTEX 的 `install.sh`、`Dockerfile` 和 `.github/workflows/release.yml`，按 Artemis 配置与 GHCR 发布流程调整，保留 AGPL-3.0 来源说明。
 - **前端模板**：继承模板的许可证见 `web/LICENSE`，发行包放入 `licenses/web-LICENSE`。
 - **Outfit 字体**：许可位于 `web/src/lib/fonts/assets/Outfit-LICENSE.txt`，发行包同步包含；字体许可与应用 AGPL 许可分别适用。
 - **Amicro 设计参考**：https://github.com/Subhan-code/Amicro--Micro-transitions- 。产品页面和流程按 Artemis 调整。

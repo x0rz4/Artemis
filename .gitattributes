@@ -1,2 +1,7 @@
 *.bat text eol=crlf
 *.sh  text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+.env.example text eol=lf
