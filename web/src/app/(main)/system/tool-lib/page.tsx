@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { LibraryUpdates } from "@/components/library-updates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -146,25 +146,26 @@ export default function ToolLibPage() {
   const [syncItems, setSyncItems] = React.useState<LibSyncItem[]>([]);
   const [snaps, setSnaps] = React.useState<LibSnapshot[]>([]);
 
-  const load = React.useCallback(
-    (quiet = false) => {
-      if (!quiet) setLoading(true);
-      api
-        .toolLib()
-        .then(setLib)
-        .catch((e) => toast.error("读取工具库失败：" + (e as Error).message))
-        .finally(() => setLoading(false));
-      api
-        .toolLibSources()
-        .then(setSources)
-        .catch(() => {});
-      api
-        .toolLibSnapshots()
-        .then(setSnaps)
-        .catch(() => {});
-    },
-    [],
-  );
+  const load = React.useCallback((quiet = false) => {
+    if (!quiet) setLoading(true);
+    api
+      .toolLib()
+      .then(setLib)
+      .catch((e) => toast.error("读取工具库失败：" + (e as Error).message))
+      .finally(() => setLoading(false));
+    api
+      .toolLibSources()
+      .then(setSources)
+      .catch((error: Error) =>
+        toast.error("读取工具库同步信息失败", { id: "tool-lib-load-error", description: error.message }),
+      );
+    api
+      .toolLibSnapshots()
+      .then(setSnaps)
+      .catch((error: Error) =>
+        toast.error("读取工具库同步信息失败", { id: "tool-lib-load-error", description: error.message }),
+      );
+  }, []);
 
   React.useEffect(() => {
     load();
@@ -257,9 +258,7 @@ export default function ToolLibPage() {
       .then((sum) => {
         // 自检结果只有告警意义：不阻断任何操作，只把问题列出来。
         if (sum.missing || sum.mismatch || sum.runtime_missing) {
-          toast.warning(
-            `自检完成：缺失 ${sum.missing}，摘要不符 ${sum.mismatch}，runtime 缺失 ${sum.runtime_missing}`,
-          );
+          toast.warning(`自检完成：缺失 ${sum.missing}，摘要不符 ${sum.mismatch}，runtime 缺失 ${sum.runtime_missing}`);
         } else {
           toast.success(`自检完成：${sum.total} 个条目全部就绪`);
         }
@@ -346,7 +345,8 @@ export default function ToolLibPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">工具库</h1>
           <p className="text-muted-foreground text-sm">
-            文件与清单是真源；导入后注册成 <span className="font-mono">kind=command</span> 的工具，执行仍走拦截规则与人工审批。
+            文件与清单是真源；导入后注册成 <span className="font-mono">kind=command</span>{" "}
+            的工具，执行仍走拦截规则与人工审批。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -361,6 +361,7 @@ export default function ToolLibPage() {
         </div>
       </div>
 
+      <LibraryUpdates kind="tools" onUpdated={load} />
       {lib && (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
@@ -369,9 +370,7 @@ export default function ToolLibPage() {
             {!!sum?.mismatch && <Badge variant="destructive">摘要不符 {sum.mismatch}</Badge>}
             {!!sum?.runtime_missing && <Badge variant="destructive">runtime 缺失 {sum.runtime_missing}</Badge>}
             {!!sum?.unpinned && <Badge variant="outline">未钉摘要 {sum.unpinned}</Badge>}
-            {!!lib.updated_at && (
-              <span className="text-muted-foreground text-xs">清单更新于 {lib.updated_at}</span>
-            )}
+            {!!lib.updated_at && <span className="text-muted-foreground text-xs">清单更新于 {lib.updated_at}</span>}
           </div>
           <p className="text-muted-foreground text-xs">
             真源：<span className="font-mono">{lib.manifest}</span> · 目录 <span className="font-mono">{lib.dir}</span>
@@ -403,7 +402,12 @@ export default function ToolLibPage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tl-name">工具名（留空用文件名）</Label>
-              <Input id="tl-name" value={form.name} onChange={(e) => setF({ name: e.target.value })} placeholder="fscan" />
+              <Input
+                id="tl-name"
+                value={form.name}
+                onChange={(e) => setF({ name: e.target.value })}
+                placeholder="fscan"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tl-purpose">用途说明</Label>
@@ -468,7 +472,8 @@ export default function ToolLibPage() {
             来源与同步
           </CardTitle>
           <CardDescription>
-            github 型读仓库里的清单文件，http 型读任意静态清单；同步只增改条目，本地独有的工具不会被抹掉。令牌存在服务端设置里，页面只显示是否已配置。
+            github 型读仓库里的清单文件，http
+            型读任意静态清单；同步只增改条目，本地独有的工具不会被抹掉。令牌存在服务端设置里，页面只显示是否已配置。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -493,7 +498,11 @@ export default function ToolLibPage() {
                       {s.config_error ? <span className="text-destructive">{s.config_error}</span> : s.manifest_url}
                     </TableCell>
                     <TableCell className="text-xs">
-                      {s.has_token ? <Badge variant="secondary">已配置</Badge> : <span className="text-muted-foreground">匿名</span>}
+                      {s.has_token ? (
+                        <Badge variant="secondary">已配置</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">匿名</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs">
                       {s.last_error ? (
@@ -516,7 +525,12 @@ export default function ToolLibPage() {
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-1.5">
               <Label htmlFor="src-name">源名</Label>
-              <Input id="src-name" value={src.name} onChange={(e) => setS({ name: e.target.value })} placeholder="official" />
+              <Input
+                id="src-name"
+                value={src.name}
+                onChange={(e) => setS({ name: e.target.value })}
+                placeholder="official"
+              />
             </div>
             <div className="space-y-1.5">
               <Label>类型</Label>
@@ -532,19 +546,39 @@ export default function ToolLibPage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="src-repo">仓库 owner/repo（github）</Label>
-              <Input id="src-repo" value={src.repo} onChange={(e) => setS({ repo: e.target.value })} placeholder="org/artex-tools" />
+              <Input
+                id="src-repo"
+                value={src.repo}
+                onChange={(e) => setS({ repo: e.target.value })}
+                placeholder="org/artex-tools"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="src-branch">分支</Label>
-              <Input id="src-branch" value={src.branch} onChange={(e) => setS({ branch: e.target.value })} placeholder="main" />
+              <Input
+                id="src-branch"
+                value={src.branch}
+                onChange={(e) => setS({ branch: e.target.value })}
+                placeholder="main"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="src-path">清单路径（github）</Label>
-              <Input id="src-path" value={src.path} onChange={(e) => setS({ path: e.target.value })} placeholder="manifest.json" />
+              <Input
+                id="src-path"
+                value={src.path}
+                onChange={(e) => setS({ path: e.target.value })}
+                placeholder="manifest.json"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="src-url">清单 URL（http）</Label>
-              <Input id="src-url" value={src.url} onChange={(e) => setS({ url: e.target.value })} placeholder="https://dl.example.com/tools/manifest.json" />
+              <Input
+                id="src-url"
+                value={src.url}
+                onChange={(e) => setS({ url: e.target.value })}
+                placeholder="https://dl.example.com/tools/manifest.json"
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="src-token">访问令牌（可选，留空不改）</Label>
@@ -556,8 +590,12 @@ export default function ToolLibPage() {
                 placeholder="私有源只读令牌"
               />
             </div>
-            <label className="flex items-center gap-2 self-end pb-2 text-sm">
-              <Checkbox checked={src.allow_unpinned} onCheckedChange={(v) => setS({ allow_unpinned: v === true })} />
+            <label htmlFor="source-allow-unpinned" className="flex items-center gap-2 self-end pb-2 text-sm">
+              <Checkbox
+                id="source-allow-unpinned"
+                checked={src.allow_unpinned}
+                onCheckedChange={(v) => setS({ allow_unpinned: v === true })}
+              />
               允许未钉 sha256 的条目
             </label>
           </div>
@@ -615,7 +653,9 @@ export default function ToolLibPage() {
                   </span>
                   <span className="text-muted-foreground">
                     {it.error || it.reason || ""}
-                    {it.local_version || it.remote_version ? ` （${it.local_version || "-"} → ${it.remote_version || "-"}）` : ""}
+                    {it.local_version || it.remote_version
+                      ? ` （${it.local_version || "-"} → ${it.remote_version || "-"}）`
+                      : ""}
                   </span>
                 </div>
               ))}
@@ -627,9 +667,7 @@ export default function ToolLibPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">清单条目</CardTitle>
-          <CardDescription>
-            缺文件、摘要不符、runtime 没装都只是告警——武器库不全时其它工具照常可用。
-          </CardDescription>
+          <CardDescription>缺文件、摘要不符、runtime 没装都只是告警——武器库不全时其它工具照常可用。</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -678,16 +716,12 @@ export default function ToolLibPage() {
                     <TableCell>
                       <div className="flex flex-col gap-1">
                         <ShaBadge check={t.check} />
-                        {t.check.problem && (
-                          <span className="text-muted-foreground text-xs">{t.check.problem}</span>
-                        )}
+                        {t.check.problem && <span className="text-muted-foreground text-xs">{t.check.problem}</span>}
                       </div>
                     </TableCell>
                     <TableCell className="text-xs">
                       {t.runtime ? t.runtime : "原生"}
-                      {t.runtime && !t.check.runtime_ok ? (
-                        <span className="text-destructive">（未安装）</span>
-                      ) : null}
+                      {t.runtime && !t.check.runtime_ok ? <span className="text-destructive">（未安装）</span> : null}
                     </TableCell>
                     <TableCell className="text-xs">
                       {t.registered ? (

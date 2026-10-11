@@ -21,7 +21,7 @@ import (
 // hostTools, if set, returns runtime host tools (currently the traffic tools when
 // capture is on) to add to EVERY agent's base list — the DB tools table then
 // filters them per-agent binding. Empty/nil → no host tools this run (capture off).
-func wireAgentAugment(pg *db.DB, skillRoots []string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
+func wireAgentAugment(pg *db.DB, skillRoots func() []string, hostTools func() ([]actool.CoreTool, map[string][]string)) {
 	agent.ToolAugment = func(ctx context.Context, agentKey string) ([]actool.CoreTool, agent.DeferredInfo, func()) {
 		a, err := pg.GetAgentByKey(agentKey)
 		if err != nil || a == nil {
@@ -38,7 +38,7 @@ func wireAgentAugment(pg *db.DB, skillRoots []string, hostTools func() ([]actool
 				nameSet[n] = true
 			}
 			// 按目录名（Base of Dir）匹配可见性，不是 skill 的展示名。
-			reg = loadSkillRegistry(skillRoots, nameSet)
+			reg = loadSkillRegistry(skillRoots(), nameSet)
 		}
 		// A server named by any visible skill's `mcps:` is skill-gated: its tools
 		// are deferred + locked (not in the global block) until that skill loads.

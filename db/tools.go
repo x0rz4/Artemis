@@ -207,6 +207,29 @@ func (d *DB) DeleteCustomTool(key string) error {
 // system=true 的内置工具永远不会被碰——清单条目与内置 key 撞车时直接报错，
 // 避免一次导入把内置工具顶掉。
 func (d *DB) UpsertLibraryTool(t *Tool, overwriteBinding bool) (created bool, err error) {
+	return upsertLibraryTool(d, t, overwriteBinding)
+}
+
+// ApplyLibraryTools registers a selected release as one transaction. The caller
+// switches its manifest before commit and restores it if commit fails.
+func (d *DB) ApplyLibraryTools(rows []*Tool, publish func() error) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, row := range rows {
+		if _, err = upsertLibraryTool(tx, row, false); err != nil {
+			return err
+		}
+	}
+	if err = publish(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func upsertLibraryTool(d interface{ QueryRow(string, ...any) *sql.Row }, t *Tool, overwriteBinding bool) (created bool, err error) {
 	schema := t.Schema
 	if len(schema) == 0 {
 		schema = json.RawMessage("{}")
@@ -227,7 +250,7 @@ ON CONFLICT (key) DO UPDATE
        schema      = EXCLUDED.schema,
        kind        = EXCLUDED.kind,
        exec        = EXCLUDED.exec,
-       deferred    = EXCLUDED.deferred,
+       deferred    = CASE WHEN $9 THEN EXCLUDED.deferred ELSE tools.deferred END,
        agents      = CASE WHEN $9 THEN EXCLUDED.agents  ELSE tools.agents  END,
        enabled     = CASE WHEN $9 THEN EXCLUDED.enabled ELSE tools.enabled END,
        updated_at  = now()

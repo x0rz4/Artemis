@@ -448,7 +448,7 @@ export interface ExplorationNodeQuery {
 
 // 目标管理卡片用的目标(后端已把 payload 拆成 text/vulnclass)。
 export interface TaskGoal {
-	proof?: { evidence_id: string; reason: string; at: string };
+  proof?: { evidence_id: string; reason: string; at: string };
   id: string;
   text: string;
   vulnclass?: string;
@@ -1735,4 +1735,23 @@ export interface InterceptExecution {
   session: string;
   seq: number;
   items: Activity[];
+}
+export interface LibraryUpdateState {
+  source: string;
+  release: string;
+  disabled: boolean;
+  checked_at: string;
+  error?: string;
+  platform: string;
+  items: {
+    name: string;
+    version: string;
+    local_version: string;
+    description: string;
+    changes: string;
+    status: "add" | "update" | "keep" | "conflict" | "unsupported";
+    reason?: string;
+    shadowed?: boolean;
+    assets: { platform: string }[];
+  }[];
 }

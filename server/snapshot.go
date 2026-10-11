@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,11 +34,12 @@ const (
 
 // snapshotInfo 是一份快照的元数据（列表接口直接返回）。
 type snapshotInfo struct {
-	ID        string   `json:"id"`
-	CreatedAt string   `json:"created_at"`
-	Reason    string   `json:"reason,omitempty"`
-	Items     []string `json:"items"`
-	Bytes     int64    `json:"bytes"`
+	SHA256    map[string]string `json:"sha256,omitempty"`
+	ID        string            `json:"id"`
+	CreatedAt string            `json:"created_at"`
+	Reason    string            `json:"reason,omitempty"`
+	Items     []string          `json:"items"`
+	Bytes     int64             `json:"bytes"`
 }
 
 // snapshotRoot 是某个库的快照根（data/tools/.snapshots）。
@@ -132,7 +134,7 @@ func takeSnapshot(base, reason string, rels []string) (string, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
-	id := time.Now().UTC().Format("20060102T150405.000")
+	id := time.Now().UTC().Format("20060102T150405.000000000")
 	dir := filepath.Join(root, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -147,6 +149,28 @@ func takeSnapshot(base, reason string, rels []string) (string, error) {
 		}
 	}
 	meta := snapshotInfo{ID: id, CreatedAt: time.Now().UTC().Format(time.RFC3339), Reason: reason, Items: items, Bytes: dirBytes(dir)}
+	meta.SHA256 = map[string]string{}
+	if err := filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		sum, err := toolFileSHA256(p)
+		if err != nil {
+			return err
+		}
+		meta.SHA256[filepath.ToSlash(rel)] = sum
+		return nil
+	}); err != nil {
+		cleanup()
+		return "", err
+	}
 	b, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		cleanup()
@@ -225,7 +249,7 @@ func snapshotItems(base, id string) []string {
 }
 
 // restoreSnapshot 把一份快照里的条目放回库根，返回实际还原的相对路径。
-// 快照里的条目覆盖现有文件/目录；快照之后新增的内容不动。
+// 按库条目恢复：目录内部以快照为准，未包含的其它库条目不动。
 func restoreSnapshot(base, id string) ([]string, error) {
 	if id == "" {
 		return nil, errors.New("未指定快照")
@@ -233,42 +257,110 @@ func restoreSnapshot(base, id string) ([]string, error) {
 	if msg := validToolName(id); msg != "" {
 		return nil, fmt.Errorf("快照 id 非法: %s", msg)
 	}
-	dir := filepath.Join(snapshotRoot(base), id)
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
+	source := filepath.Join(snapshotRoot(base), id)
+	if info, err := os.Stat(source); err != nil || !info.IsDir() {
 		return nil, errors.New("快照不存在: " + id)
 	}
-	restored := []string{}
-	err = filepath.Walk(dir, func(p string, fi os.FileInfo, werr error) error {
-		if werr != nil || fi == nil {
-			return nil
-		}
-		rel, rerr := filepath.Rel(dir, p)
-		if rerr != nil || rel == "." {
-			return nil
-		}
-		if fi.IsDir() {
-			return nil
-		}
-		slash := filepath.ToSlash(rel)
-		if slash == snapshotMetaFile {
-			return nil
-		}
-		if _, msg := skillRelPath(slash); msg != "" {
-			return nil // 快照里不该有这种东西；有也不还原
-		}
-		target := filepath.Join(base, filepath.FromSlash(slash))
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if err := copyTree(p, target); err != nil {
-			return err
-		}
-		restored = append(restored, slash)
-		return nil
-	})
+	stage, err := os.MkdirTemp(base, ".restore-*")
 	if err != nil {
-		return restored, err
+		return nil, err
+	}
+	defer os.RemoveAll(stage)
+	items := snapshotItems(base, id)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i] == libManifestName {
+			return false
+		}
+		if items[j] == libManifestName {
+			return true
+		}
+		return items[i] < items[j]
+	})
+	rels := []string{}
+	for _, rel := range items {
+		clean, msg := skillRelPath(rel)
+		if msg != "" {
+			return nil, errors.New("快照包含非法路径")
+		}
+		nested := false
+		for _, parent := range rels {
+			if clean == parent || strings.HasPrefix(clean, parent+"/") {
+				nested = true
+				break
+			}
+		}
+		if nested {
+			continue
+		}
+		if err = copyTree(filepath.Join(source, filepath.FromSlash(clean)), filepath.Join(stage, "new", filepath.FromSlash(clean))); err != nil {
+			return nil, err
+		}
+		rels = append(rels, clean)
+	}
+	type switchedItem struct {
+		rel    string
+		hadOld bool
+	}
+	if raw, readErr := os.ReadFile(filepath.Join(source, snapshotMetaFile)); readErr == nil {
+		var meta snapshotInfo
+		if err = json.Unmarshal(raw, &meta); err != nil {
+			return nil, err
+		}
+		for rel, want := range meta.SHA256 {
+			clean, msg := skillRelPath(rel)
+			if msg != "" {
+				return nil, errors.New("快照校验路径无效")
+			}
+			got, hashErr := toolFileSHA256(filepath.Join(stage, "new", filepath.FromSlash(clean)))
+			if hashErr != nil || got != want {
+				return nil, fmt.Errorf("快照内容校验失败: %s", clean)
+			}
+		}
+	}
+	switched := []switchedItem{}
+	rollback := func(cause error) error {
+		for i := len(switched) - 1; i >= 0; i-- {
+			item := switched[i]
+			target := filepath.Join(base, filepath.FromSlash(item.rel))
+			cause = errors.Join(cause, os.RemoveAll(target))
+			if item.hadOld {
+				cause = errors.Join(cause, os.Rename(filepath.Join(stage, "old", filepath.FromSlash(item.rel)), target))
+			}
+		}
+		return cause
+	}
+	for _, rel := range rels {
+		target := filepath.Join(base, filepath.FromSlash(rel))
+		backup := filepath.Join(stage, "old", filepath.FromSlash(rel))
+		if err = os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return nil, rollback(err)
+		}
+		hadOld := false
+		if _, statErr := os.Lstat(target); statErr == nil {
+			if err = os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
+				return nil, rollback(err)
+			}
+			if err = os.Rename(target, backup); err != nil {
+				return nil, rollback(err)
+			}
+			hadOld = true
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, rollback(statErr)
+		}
+		switched = append(switched, switchedItem{rel, hadOld})
+		if err = os.Rename(filepath.Join(stage, "new", filepath.FromSlash(rel)), target); err != nil {
+			return nil, rollback(err)
+		}
+	}
+	restored := []string{}
+	for _, rel := range rels {
+		_ = filepath.Walk(filepath.Join(base, filepath.FromSlash(rel)), func(p string, fi os.FileInfo, err error) error {
+			if err == nil && !fi.IsDir() {
+				r, _ := filepath.Rel(base, p)
+				restored = append(restored, filepath.ToSlash(r))
+			}
+			return err
+		})
 	}
 	sort.Strings(restored)
 	return restored, nil
@@ -277,8 +369,17 @@ func restoreSnapshot(base, id string) ([]string, error) {
 // pruneSnapshots 只保留最近 maxSnapshots 份（快照会占磁盘，工具包很大）。
 func pruneSnapshots(base string) {
 	snaps := listSnapshots(base)
-	for i := maxSnapshots; i < len(snaps); i++ {
+	protected := ""
+	if len(snaps) > 0 {
+		protected = strings.TrimPrefix(snaps[0].Reason, "pre-rollback:")
+	}
+	remaining := len(snaps)
+	for i := len(snaps) - 1; i >= 0 && remaining > maxSnapshots; i-- {
+		if snaps[i].ID == protected {
+			continue
+		}
 		_ = os.RemoveAll(filepath.Join(snapshotRoot(base), snaps[i].ID))
+		remaining--
 	}
 }
 

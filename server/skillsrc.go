@@ -19,15 +19,8 @@ import (
 
 // 技能库：多扫描根 + 多源同步。
 //
-// 扫描根按优先级：
-//
-//  1. s.skillDir          —— 主根（config.SkillDir()：发布包/镜像里的 skills/，或 ARTEX_SKILL_DIR）
-//  2. <data>/skills/uploaded —— 页面上传与 github/http 源同步进来的 skill
-//  3. <data>/skills/git/<name> —— git 型源克隆下来的整仓，每个仓库一个根
-//
-// 同名 skill 以靠前的根为准：内置的不会被用户上传顶掉。写入（改文件、删文件、改元数据）
-// 落在该 skill 当前所在的根；新建与上传默认落 uploaded 根，这样程序目录里的内置技能集
-// 不会被用户内容污染，重装/更新程序也不会带走用户技能。
+// 显式本地根 > 清单激活的官方版本 > 内置 > 上传 > git；每轮装配动态解析。
+// 同名以靠前的根为准。新建、上传与自定义源继续写 uploaded，官方包写 managed。
 
 const (
 	skillsLibDirName    = "skills"
@@ -38,7 +31,7 @@ const (
 )
 
 const skillLibComment = "技能库清单：sources 是同步源（git 整仓 / github·http 的 zip 清单），skills 是同步记录。" +
-	"扫描根依次为程序旁的 skills/、data/skills/uploaded、data/skills/git/<源名>，同名以靠前的为准。"
+	"扫描根依次为显式本地、官方管理版本、内置、上传和 git；同名以靠前的为准。"
 
 // skillSourceEntry 是 github/http 型源清单里的一条 skill（一个 zip 资产）。
 type skillSourceEntry struct {
@@ -56,11 +49,12 @@ type skillSourceManifest struct {
 
 // skillSyncRecord 记录一个由源同步进来的 skill（仅用于展示与清理）。
 type skillSyncRecord struct {
-	Name     string `json:"name"`
-	Source   string `json:"source"`
-	Dir      string `json:"dir,omitempty"`
-	Revision string `json:"revision,omitempty"`
-	SyncedAt string `json:"synced_at,omitempty"`
+	Registry *registryInstall `json:"registry,omitempty"`
+	Name     string           `json:"name"`
+	Source   string           `json:"source"`
+	Dir      string           `json:"dir,omitempty"`
+	Revision string           `json:"revision,omitempty"`
+	SyncedAt string           `json:"synced_at,omitempty"`
 }
 
 type skillManifest struct {
@@ -97,8 +91,18 @@ func (s *Server) gitSkillsRoot() string {
 // skillRoots 返回全部扫描根（按优先级）。
 func (s *Server) skillRoots() []string {
 	roots := []string{}
+	managed := s.registrySkillRoots()
+	if !explicitSkillRoot() {
+		roots = append(roots, managed...)
+	}
 	if s.skillDir != "" {
 		roots = append(roots, s.skillDir)
+	}
+	if explicitSkillRoot() {
+		roots = append(roots, managed...)
+		if builtin := s.builtinSkillRoot(); filepath.Clean(builtin) != filepath.Clean(s.skillDir) {
+			roots = append(roots, builtin)
+		}
 	}
 	if base := s.skillsLibDir(); base != "" {
 		roots = append(roots, filepath.Join(base, skillsUploadDirName))
@@ -365,6 +369,10 @@ func (s *Server) skSaveSource(w http.ResponseWriter, r *http.Request) {
 	}
 	src := req.Source
 	src.Name = strings.ToLower(strings.TrimSpace(src.Name))
+	if src.Name == registrySource {
+		writeErr(w, 400, "官方源由程序维护，请使用官方云更新面板")
+		return
+	}
 	if !reSourceName.MatchString(src.Name) {
 		writeErr(w, 400, "源名需为小写字母或数字开头，仅含小写字母/数字/短横线/下划线（≤64）")
 		return
@@ -498,12 +506,19 @@ func (s *Server) skSync(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.skillLibMu.Unlock()
 
-	var req struct {
-		Names  []string `json:"names"`
-		DryRun bool     `json:"dry_run"`
-		Force  bool     `json:"force"`
+	var req librarySyncRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, 400, "无效请求体")
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if contains(req.Names, registrySource) || req.Release != "" {
+		s.syncRegistry(w, r, "skills", req)
+		return
+	}
+	if len(req.Items) > 0 || len(req.Replace) > 0 {
+		writeErr(w, 400, "条目选择需要指定官方发布版本")
+		return
+	}
 
 	m, err := s.loadSkillManifest()
 	if err != nil {
@@ -779,6 +794,12 @@ func (s *Server) skRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.skillLibMu.Unlock()
+	unlock, idleErr := s.lockLibraryIdle()
+	if idleErr != nil {
+		writeErr(w, 409, idleErr.Error())
+		return
+	}
+	defer unlock()
 
 	var req struct {
 		ID string `json:"id"`

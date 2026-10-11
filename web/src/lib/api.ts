@@ -52,15 +52,16 @@ import type {
   InterceptRule,
   JudgeConfig,
   JudgeUsage,
+  LibraryUpdateState,
+  LibSnapshot,
+  LibSource,
+  LibSourceInfo,
+  LibSyncResult,
   LLMPoolStatus,
   LLMProfile,
   LLMRecordDetail,
   LLMRecordItem,
   LLMRetryOverride,
-  LibSnapshot,
-  LibSource,
-  LibSourceInfo,
-  LibSyncResult,
   LLMRetryPolicy,
   LLMTask,
   MCPServer,
@@ -78,6 +79,7 @@ import type {
   Severity,
   SkillCall,
   SkillItem,
+  SkillSourceState,
   SSProject,
   SSTask,
   Stats,
@@ -99,7 +101,6 @@ import type {
   ToolLib,
   ToolLibImportResult,
   ToolLibSummary,
-  SkillSourceState,
   ToolStat,
   TrafficDetail,
   TrafficEvidenceRef,
@@ -152,12 +153,21 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 
-export async function downloadExport(path:string,fallback:string) {
-  const token=getToken();const r=await fetch(`/api${path}`,{headers:token?{Authorization:`Bearer ${token}`}:{}});
-  if(!r.ok){const payload=await r.json().catch(()=>null);throw new Error(payload?.error || `导出失败 (${r.status})`);}
-  const url=URL.createObjectURL(await r.blob());const a=document.createElement("a");a.href=url;
-  a.download=r.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || fallback;
-  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+export async function downloadExport(path: string, fallback: string) {
+  const token = getToken();
+  const r = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!r.ok) {
+    const payload = await r.json().catch(() => null);
+    throw new Error(payload?.error || `导出失败 (${r.status})`);
+  }
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = r.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || fallback;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // sseUrl builds a URL for Server-Sent Events streams.
@@ -223,6 +233,16 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
 }
 
 export const api = {
+  libraryUpdates: (kind: "tools" | "skills", check = false) =>
+    check
+      ? post<LibraryUpdateState>(`/library-updates/check?kind=${kind}`, {})
+      : get<LibraryUpdateState>(`/library-updates?kind=${kind}`),
+  libraryUpdateSettings: (disabled: boolean) => put<{ disabled: boolean }>("/library-updates/settings", { disabled }),
+  applyLibraryUpdates: (kind: "tools" | "skills", release: string, items: string[], replace: string[]) =>
+    post<{ changed: number; skipped: string[]; snapshot?: string }>(
+      `/${kind === "tools" ? "tool-lib" : "skills"}/sync`,
+      { names: ["artemis-registry"], release, items, replace },
+    ),
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
 
@@ -351,9 +371,25 @@ export const api = {
   // 重跑一条没跑成功的意图(blocked/exhausted/stopped)：置回 open，worker 会重新认领、从头再跑。
   rerunIntent: (taskId: string, intentId: string) =>
     post<{ id: string; reopened: number; queued: boolean }>(`/tasks/${taskId}/intents/${intentId}/rerun`),
-	 taskRuntime: (taskId: string) => get<{ workers: { intent_id: string; worker: string; phase: string; tool?: string; elapsed_seconds: number; tool_calls: number; write_calls: number; constraints_version?: string }[]; llm_in_flight: number; settling: boolean; observed_at: string }>(`/tasks/${taskId}/runtime`),
+  taskRuntime: (taskId: string) =>
+    get<{
+      workers: {
+        intent_id: string;
+        worker: string;
+        phase: string;
+        tool?: string;
+        elapsed_seconds: number;
+        tool_calls: number;
+        write_calls: number;
+        constraints_version?: string;
+      }[];
+      llm_in_flight: number;
+      settling: boolean;
+      observed_at: string;
+    }>(`/tasks/${taskId}/runtime`),
   // 批量重跑本任务全部 blocked 意图（一次网络/LLM 断连导致多条 blocked 时一键全部重试）。
-  rerunBlocked: (taskId: string) => post<{ id: string; reopened: number; queued: boolean }>(`/tasks/${taskId}/intents/rerun-blocked`),
+  rerunBlocked: (taskId: string) =>
+    post<{ id: string; reopened: number; queued: boolean }>(`/tasks/${taskId}/intents/rerun-blocked`),
   setActive: (id: string) => post<{ active: string }>("/active", { id }),
   // ---- stats ----
   stats: (task?: string) => get<Stats>(`/stats${tq(task)}`),
@@ -389,9 +425,12 @@ export const api = {
   taskConstraints: (id: string) =>
     get<{ constraints: TaskConstraint[] | null; version: string }>(`/tasks/${id}/constraints`).then((response) => ({
       constraints: arr(response.constraints),
-	  version: response.version ?? "",
+      version: response.version ?? "",
     })),
-	applyConstraints: (id: string, mode: "steer" | "pause") => post<{ version: string; workers: number; failures:string[];effect:string }>(`/tasks/${id}/constraints/apply`, {mode}),
+  applyConstraints: (id: string, mode: "steer" | "pause") =>
+    post<{ version: string; workers: number; failures: string[]; effect: string }>(`/tasks/${id}/constraints/apply`, {
+      mode,
+    }),
   // 新增约束（不通知 planner，下一轮规划自然读到）。
   addConstraint: (id: string, text: string, kind: TaskConstraint["kind"]) =>
     post<TaskConstraint>(`/tasks/${id}/constraints`, { text, kind }),
@@ -812,8 +851,7 @@ export const api = {
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
   notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
-  notifyChannels: () =>
-    get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
+  notifyChannels: () => get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {
     name: string;
     kind: string;
@@ -983,15 +1021,28 @@ export const api = {
   // ---- conversations (chat page) ----
   conversations: () => get<{ conversations: Conversation[] }>("/conversations").then((r) => arr(r.conversations)),
   conversation: (id: number) => get<Conversation>(`/conversations/${id}`),
-	conversationsPage: (q: { query?: string; agent?: string; cursor?: string; limit?: number }) => {
-	  const p=new URLSearchParams({ q:q.query ?? "", agent:q.agent ?? "", cursor:q.cursor ?? "", limit:String(q.limit ?? 50) });
-	  return get<{conversations:Conversation[]; next_cursor:string; total:number}>(`/conversations/search?${p}`);
-	},
-	exportConversation: async (id:number,format:"md"|"json"="md",tools=true,thinking=false) => {
-	  const token=getToken();const r=await fetch(`/api/conversations/${id}/export?format=${format}&tools=${tools}&thinking=${thinking}`,{headers:token?{Authorization:`Bearer ${token}`}:{}});
-	  if(!r.ok)throw new Error(`导出失败: ${r.status}`);
-	  const url=URL.createObjectURL(await r.blob());const a=document.createElement("a");a.href=url;a.download=`conversation-${id}.${format}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-	},
+  conversationsPage: (q: { query?: string; agent?: string; cursor?: string; limit?: number }) => {
+    const p = new URLSearchParams({
+      q: q.query ?? "",
+      agent: q.agent ?? "",
+      cursor: q.cursor ?? "",
+      limit: String(q.limit ?? 50),
+    });
+    return get<{ conversations: Conversation[]; next_cursor: string; total: number }>(`/conversations/search?${p}`);
+  },
+  exportConversation: async (id: number, format: "md" | "json" = "md", tools = true, thinking = false) => {
+    const token = getToken();
+    const r = await fetch(`/api/conversations/${id}/export?format=${format}&tools=${tools}&thinking=${thinking}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) throw new Error(`导出失败: ${r.status}`);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `conversation-${id}.${format}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
   createConversation: (agent_key: string, title = "", llm_profile_id?: number | null) =>
     post<Conversation>("/conversations", { agent_key, title, llm_profile_id: llm_profile_id ?? null }),
   updateConversation: (id: number, input: { title?: string; pinned?: boolean }) =>
@@ -1096,7 +1147,15 @@ export const api = {
   // 条目与注册出的工具 key；错误文本（已存在/缺少入口文件）原样带给调用方。
   uploadTool: async (
     file: File,
-    opts: { name?: string; kind?: string; runtime?: string; entry?: string; purpose?: string; version?: string; agents?: string },
+    opts: {
+      name?: string;
+      kind?: string;
+      runtime?: string;
+      entry?: string;
+      purpose?: string;
+      version?: string;
+      agents?: string;
+    },
     overwrite = false,
   ): Promise<{ name: string; key: string; path: string; kind?: string; created: boolean }> => {
     const fd = new FormData();
@@ -1119,9 +1178,11 @@ export const api = {
   saveToolLibSource: (body: { source: LibSource; token?: string; clear_token?: boolean }) =>
     put<{ ok: boolean; has_token: boolean }>("/tool-lib/sources", body),
   deleteToolLibSource: (name: string) => del<{ deleted: string }>(`/tool-lib/sources/${encodeURIComponent(name)}`),
-  toolLibSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) => post<LibSyncResult>("/tool-lib/sync", body),
+  toolLibSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) =>
+    post<LibSyncResult>("/tool-lib/sync", body),
   // 快照：同步/覆盖上传/清除/回滚前自动生成，最多保留 5 份。
-  toolLibSnapshots: () => get<{ snapshots: LibSnapshot[]; dir: string }>("/tool-lib/snapshots").then((r) => arr(r.snapshots)),
+  toolLibSnapshots: () =>
+    get<{ snapshots: LibSnapshot[]; dir: string }>("/tool-lib/snapshots").then((r) => arr(r.snapshots)),
   toolLibRollback: (id?: string) =>
     post<{ snapshot: string; restored: string[]; imported?: number }>("/tool-lib/rollback", id ? { id } : {}),
 
@@ -1131,8 +1192,10 @@ export const api = {
     put<{ ok: boolean; has_token: boolean }>("/skills/sources", body),
   deleteSkillSource: (name: string, purge = false) =>
     del<{ deleted: string }>(`/skills/sources/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`),
-  skillSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) => post<LibSyncResult>("/skills/sync", body),
-  skillSnapshots: () => get<{ snapshots: LibSnapshot[]; dir: string }>("/skills/snapshots").then((r) => arr(r.snapshots)),
+  skillSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) =>
+    post<LibSyncResult>("/skills/sync", body),
+  skillSnapshots: () =>
+    get<{ snapshots: LibSnapshot[]; dir: string }>("/skills/snapshots").then((r) => arr(r.snapshots)),
   skillRollback: (id?: string) =>
     post<{ snapshot: string; restored: string[]; roots?: string[] }>("/skills/rollback", id ? { id } : {}),
 

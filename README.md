@@ -91,6 +91,14 @@ bash install.sh --mode local --database docker
 
 本地无交互连接已有数据库时，通过 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`、`POSTGRES_SSLMODE` 提供参数，再添加 `--yes`；已有 `ARTEX_PG_DSN` 或 `ARTEX_CONFIG` 按原有优先级使用。`--database docker` 使用 `.env` 内的数据库参数，宿主机端口可用 `ARTEX_PG_PORT` 修改；重跑相同命令会保留配置并启动已有数据库容器。
 
+### 可选基线工具
+
+日常更新可在「系统 → 工具库 / Skill → 官方云更新」选择安装，默认每六小时只检查、不自动安装。公开源为 [Artemis-registry](https://github.com/x0rz4/Artemis-registry)，无需 GitHub Token。支持冲突提示、固定版本更新和快照回滚，详见 [云更新与部署说明](packaging/REGISTRY.md)。
+
+Linux amd64 部署可使用 `bash install.sh --tools baseline --yes`，下载并校验 httpx、naabu、subfinder、katana、ffuf、nuclei、fscan、kscan，生成 `data/tools/manifest.json`。宿主机需 Python 3.8+；已有部署先停止 Artemis。工具默认禁用，启动后在工具库页面导入，再设置 Agent 绑定并启用。
+
+支持 `--tools httpx,ffuf` 按需选择，也可单独运行 `python3 scripts/install_tools.py --platform linux/amd64`。arm64 可安装除 kscan 外的七项工具。固定版本、更新、回滚与平台说明见 [基线工具安装](packaging/README.md)。
+
 ### Windows 发行包
 
 1. 用 `scripts/package-release.ps1` 生成 Windows amd64 zip（见[从源码构建](#从源码构建)），解压到新的目录。

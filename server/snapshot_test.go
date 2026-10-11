@@ -3,6 +3,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -60,7 +61,7 @@ func TestSnapshotTakeAndRestore(t *testing.T) {
 		t.Fatalf("文件内容未回滚: %q", b)
 	}
 	// 工具二进制的执行位必须跟着回滚，否则回滚完工具就跑不起来了。
-	if fi, err := os.Stat(filepath.Join(base, "fscan")); err != nil || fi.Mode().Perm()&0o111 == 0 {
+	if fi, err := os.Stat(filepath.Join(base, "fscan")); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0) {
 		t.Fatalf("执行位未保留: %v %v", fi, err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(base, libManifestName)); string(b) != `{"tools":[{"name":"fscan"}]}` {
@@ -68,6 +69,61 @@ func TestSnapshotTakeAndRestore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "peass", "entry.sh")); err != nil {
 		t.Fatalf("被删目录应被还原: %v", err)
+	}
+}
+
+func TestSnapshotRollbackOldestAndStageFailure(t *testing.T) {
+	base := t.TempDir()
+	writeLibFile(t, filepath.Join(base, libManifestName), `{"version":"old"}`, 0o644)
+	writeLibFile(t, filepath.Join(base, "tool"), "old", 0o644)
+	old, err := takeSnapshot(base, "registry:v1.0.0", []string{"tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < maxSnapshots; i++ {
+		if _, err = takeSnapshot(base, "other", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = takeSnapshot(base, "pre-rollback:"+old, snapshotItems(base, old)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(snapshotRoot(base), old)); err != nil {
+		t.Fatal("rollback target pruned")
+	}
+	if len(listSnapshots(base)) != maxSnapshots {
+		t.Fatal("snapshot limit changed")
+	}
+	writeLibFile(t, filepath.Join(base, "tool"), "current", 0o644)
+	writeLibFile(t, filepath.Join(base, libManifestName), `{"version":"current"}`, 0o644)
+	if err = os.Remove(filepath.Join(snapshotRoot(base), old, "tool")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = restoreSnapshot(base, old); err == nil {
+		t.Fatal("incomplete snapshot accepted")
+	}
+	if b, _ := os.ReadFile(filepath.Join(base, "tool")); string(b) != "current" {
+		t.Fatal("failed rollback changed tool")
+	}
+	if b, _ := os.ReadFile(filepath.Join(base, libManifestName)); string(b) != `{"version":"current"}` {
+		t.Fatal("failed rollback changed manifest")
+	}
+}
+
+func TestSnapshotRejectsCorruptedBytesBeforeSwitch(t *testing.T) {
+	base := t.TempDir()
+	writeLibFile(t, filepath.Join(base, "tool"), "old", 0o644)
+	id, err := takeSnapshot(base, "registry:v1.0.0", []string{"tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLibFile(t, filepath.Join(base, "tool"), "current", 0o644)
+	writeLibFile(t, filepath.Join(snapshotRoot(base), id, "tool"), "corrupt", 0o644)
+	if _, err = restoreSnapshot(base, id); err == nil {
+		t.Fatal("corrupted snapshot accepted")
+	}
+	if b, _ := os.ReadFile(filepath.Join(base, "tool")); string(b) != "current" {
+		t.Fatal("corrupted rollback changed active bytes")
 	}
 }
 

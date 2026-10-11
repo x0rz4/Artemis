@@ -1,0 +1,14 @@
+{
+  "api-recon": [
+    "ae208743ae19e65d93da8bc40a34a70ec0b0188b9082a24d1d8bb3dd0b46b30e",
+    "c6bc613345546431ee251169c8a5ce637c2ceaab8768bd9390878e8b094ce97d"
+  ],
+  "playwright-cli": [
+    "429296410f03608293b51e36f6ffed074ed917e1bf49d497320bc3a50edbfa4a",
+    "a4d9d03d9fca1d397329c00ab3c5224cfdf5cb40d31d7e2ac78bc4809bb18bfc"
+  ],
+  "scopesentry": [
+    "bb654ebb4ee0b181bbbde0cb407c74ccab91e53e15fde1e55b2c6bcecbf92674",
+    "b39f8ea5c5d46913baa2bfe55d083d47b74035cb6cd7206b728c4d70f0c02935"
+  ]
+}

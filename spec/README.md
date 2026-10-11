@@ -32,6 +32,8 @@
 - [工具库与技能库](specs/tool-library/spec.md)：磁盘真源、单向导入、多源并集同步、快照回滚与写锁。
 - [任务预算与收尾](specs/task-budget/spec.md)：保守预留与结算、额度耗尽收尾、空转保护与步数与时长上限。
 - [备份与恢复](specs/backup-restore/spec.md)：离线加密备份、隔离恢复到空库空目录、迁移状态。
+- [基线工具安装](specs/baseline-tool-install/spec.md)：固定工具下载、校验、离线清单合并及安装入口。
+- [工具库与 Skill 云更新](specs/cloud-library-updates/spec.md)：官方独立发布、后台检查、选择安装、冲突与回滚。
 
 其余业务能力尚未逐项建立 SPEC。现有约束先以 PROJECT.md 为准；首次改动某能力时，阅读代码与测试补充涉及的现行行为，并区分已验证事实与待确认问题，不虚构完整覆盖。
 

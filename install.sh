@@ -14,6 +14,7 @@ usage() {
   --yes                     使用默认选项，不交互；已有数据库参数从环境变量读取
   --no-start                准备配置和构建/拉取镜像，不启动服务
   --install-docker          Linux 缺少 Docker 时使用官方脚本安装
+  --tools baseline|名称列表  下载基线八项工具，或用逗号分隔选择；需 Python 3.8+，更新前先停止 Artemis
   --help                    显示帮助
 
 Docker 需要 Compose >= 2.20；本地编译需要 go.mod 指定的 Go、Node.js 22、npm、rsync、Python 3。
@@ -23,12 +24,16 @@ ARTEX_PG_DSN、ARTEX_CONFIG 保持应用原有优先级；模型在 UI 中配置
 EOF
 }
 
-mode='' database='' yes=0 source_build=0 no_start=0 install_docker=0
+mode='' database='' yes=0 source_build=0 no_start=0 install_docker=0 tools_selection='' tools_platform=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --mode|--database)
+    --mode|--database|--tools)
       [ "$#" -ge 2 ] || die "$1 缺少参数"
-      if [ "$1" = --mode ]; then mode=$2; else database=$2; fi
+      case "$1" in
+        --mode) mode=$2 ;;
+        --database) database=$2 ;;
+        --tools) [ -n "$2" ] || die '--tools 不能为空'; tools_selection=$2 ;;
+      esac
       shift 2 ;;
     --build) source_build=1; shift ;;
     --yes|-y) yes=1; shift ;;
@@ -122,10 +127,38 @@ local_compose() {
   docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml "$@"
 }
 
+ensure_python() {
+  if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else need python; PYTHON=python; fi
+  "$PYTHON" -c 'import sys; assert sys.version_info >= (3, 8), "需要 Python >= 3.8"'
+}
+
+prepare_tools() {
+  [ -n "$tools_selection" ] || return 0
+  ensure_python
+  tools_platform=$1
+  "$PYTHON" scripts/install_tools.py --tools "$tools_selection" --platform "$tools_platform" --check
+}
+
+install_tools() {
+  [ -n "$tools_selection" ] || return 0
+  "$PYTHON" scripts/install_tools.py --tools "$tools_selection" --platform "$tools_platform" --output "$PWD/data/tools"
+  info '工具已准备；启动后在「系统 → 工具库」导入，再设置 Agent 绑定并启用。'
+}
+
 install_containers() {
   ensure_docker
   ensure_env
   compose config --quiet
+  if [ -n "$tools_selection" ]; then
+    local running daemon_platform
+    running=$(compose ps --status running --services)
+    if printf '%s\n' "$running" | grep -qx artemis; then
+      die '安装工具前请先执行 docker compose stop artemis，避免与工具库写入冲突'
+    fi
+    daemon_platform=$(docker info --format '{{.OSType}}/{{.Architecture}}')
+    [ -n "$daemon_platform" ] || die '无法确定 Docker daemon 平台'
+    prepare_tools "$daemon_platform"
+  fi
   if [ "$source_build" = 0 ]; then
     if ! compose pull artemis; then
       info '镜像拉取失败：请检查网络、标签及 GHCR 包的可见性。'
@@ -136,6 +169,7 @@ install_containers() {
   fi
   if [ "$source_build" = 1 ]; then compose build artemis; fi
   compose pull postgres
+  install_tools
   if [ "$no_start" = 1 ]; then info '配置与镜像已准备，未启动服务'; return; fi
   # No implicit build/pull here: failures above must not masquerade as success.
   if ! compose up -d --no-build --pull never --wait --wait-timeout 180; then
@@ -150,8 +184,7 @@ install_containers() {
 
 local_prerequisites() {
   need go; need node; need npm; need rsync
-  if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else need python; PYTHON=python; fi
-  "$PYTHON" -c 'import sys; assert sys.version_info >= (3, 8), "需要 Python >= 3.8"'
+  ensure_python
   local required current
   required=$(awk '$1 == "go" {print $2; exit}' go.mod)
   current=$(go env GOVERSION)
@@ -218,10 +251,12 @@ prepare_local_postgres() {
 install_local() {
   case "$(uname -s)" in Linux|Darwin) ;; *) die 'Windows 请使用 build.bat 和 start.bat，或在 WSL 中运行本脚本' ;; esac
   local_prerequisites
+  prepare_tools "$(go env GOOS)/$(go env GOARCH)"
   configure_local_database
   info '编译前端与内嵌二进制…'
   ARTEX_OUTPUT="$PWD/artemis" ARTEX_RELEASE=0 ARTEX_PACKAGE=0 ARTEX_SKIP_FRONTEND=0 \
     ARTEX_SKIP_NPM_CI=0 ARTEX_COMPRESS=off bash ./build.sh --target "$(go env GOOS)/$(go env GOARCH)"
+  install_tools
   if [ "$no_start" = 1 ]; then info '构建完成，运行 sh start.sh -addr 127.0.0.1:8787 启动'; return; fi
   info '构建完成，前台启动 Artemis；Ctrl-C 停止。首次访问 /setup 设置管理员密码。'
   cleanup

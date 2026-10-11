@@ -33,12 +33,14 @@ class InstallTests(unittest.TestCase):
         self.mock("docker", '''printf '%s\\n' "$*" >> "$MOCK_LOG"
 case "$*" in
   info) exit "${MOCK_DAEMON_FAIL:-0}" ;;
+  'info --format'*) echo "${MOCK_PLATFORM:-linux/x86_64}" ;;
   'compose up --help') echo --wait-timeout ;;
   *'config --quiet') exit "${MOCK_CONFIG_FAIL:-0}" ;;
   *'pull artemis') exit "${MOCK_PULL_FAIL:-0}" ;;
   *'build artemis') exit "${MOCK_BUILD_FAIL:-0}" ;;
   *'up -d'*) exit "${MOCK_UP_FAIL:-0}" ;;
   *'port artemis 8787') echo 127.0.0.1:8787 ;;
+  *'ps --status running --services') [ -z "${MOCK_RUNNING:-}" ] || echo artemis ;;
 esac
 ''')
 
@@ -127,6 +129,55 @@ esac
         result = self.run_install("--yes")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("服务已通过健康检查", result.stdout)
+
+    def tools_mock(self):
+        (self.root / "scripts/install_tools.py").write_text('''import os, sys
+with open(os.environ["MOCK_LOG"], "a", encoding="utf-8") as log:
+    log.write("install-tools " + " ".join(sys.argv[1:]) + "\\n")
+phase = "MOCK_TOOL_CHECK_FAIL" if "--check" in sys.argv else "MOCK_TOOL_INSTALL_FAIL"
+sys.exit(int(os.environ.get(phase, "0")))
+''', encoding="utf-8")
+
+    def test_tools_use_daemon_platform_and_no_start_is_preserved(self):
+        self.tools_mock()
+        self.env["MOCK_PLATFORM"] = "linux/aarch64"
+        result = self.run_install("--tools", "httpx,ffuf", "--yes", "--no-start")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertIn("install-tools --tools httpx,ffuf --platform linux/aarch64 --check", calls)
+        self.assertIn("--output", calls)
+        self.assertNotIn("up -d", calls)
+
+    def test_tools_failure_never_starts_services(self):
+        self.tools_mock()
+        for phase in ("MOCK_TOOL_CHECK_FAIL", "MOCK_TOOL_INSTALL_FAIL"):
+            with self.subTest(phase=phase):
+                self.env[phase] = "1"
+                result = self.run_install("--tools", "baseline", "--yes")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("up -d", self.calls())
+                self.assertNotIn("服务已通过健康检查", result.stdout)
+                del self.env[phase]
+
+    def test_running_application_blocks_tool_installation(self):
+        self.tools_mock()
+        self.env["MOCK_RUNNING"] = "1"
+        result = self.run_install("--tools", "baseline", "--yes")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("install-tools", self.calls())
+        self.assertNotIn("pull artemis", self.calls())
+
+    def test_local_tools_prepared_before_start(self):
+        self.local_mocks()
+        self.tools_mock()
+        self.env["POSTGRES_PASSWORD"] = "fixture-only"
+        result = self.run_install("--mode", "local", "--tools", "baseline", "--yes", "--no-start")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertIn("install-tools --tools baseline --platform linux/amd64 --check", calls)
+        self.assertIn("--output", calls)
+        self.assertLess(calls.index("--check"), calls.index("build --target"))
+        self.assertNotIn("up -d", calls)
 
     def local_mocks(self):
         self.mock("uname", "echo Linux\n")

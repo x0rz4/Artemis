@@ -28,11 +28,10 @@ func TestSourceHostsPerSource(t *testing.T) {
 	}
 
 	for _, bad := range []libSource{
-		{Type: "github"},                                        // 缺 repo
-		{Type: "http"},                                          // 缺 url
-		{Type: "http", URL: "http://dl.example.com/m.json"},     // 非 https
-		{Type: "ftp", URL: "https://dl.example.com/m.json"},     // 未知类型
-		{Type: "git", URL: "https://github.com/org/x.git"},      // git 型不参与清单同步
+		{Type: "github"}, // 缺 repo
+		{Type: "http"},   // 缺 url
+		{Type: "http", URL: "http://dl.example.com/m.json"}, // 非 https
+		{Type: "ftp", URL: "https://dl.example.com/m.json"}, // 未知类型
 	} {
 		if _, err := sourceHosts(bad); err == nil {
 			t.Errorf("%+v 应当报错", bad)
@@ -41,6 +40,9 @@ func TestSourceHostsPerSource(t *testing.T) {
 	// git 型（技能库用）的 host 白名单按其 URL 派生。
 	if _, err := sourceHosts(libSource{Type: "git", URL: "https://github.com/org/skills.git"}); err != nil {
 		t.Fatalf("git 型源应可解析: %v", err)
+	}
+	if err := sourceTypeCanSyncTools(libSource{Type: "git", URL: "https://github.com/org/x.git"}); err == nil {
+		t.Fatal("git 型不得参与工具清单同步")
 	}
 }
 
@@ -119,8 +121,8 @@ func TestCheckSourceURLEnforcesHTTPSAndHost(t *testing.T) {
 		t.Fatalf("https + 白名单内应当放行: %v", err)
 	}
 	for _, raw := range []string{
-		"http://dl.example.com/a.zip",    // 非 HTTPS
-		"https://evil.com/a.zip",         // 白名单外
+		"http://dl.example.com/a.zip",           // 非 HTTPS
+		"https://evil.com/a.zip",                // 白名单外
 		"https://dl.example.com.evil.com/a.zip", // 后缀伪装
 	} {
 		u, _ := url.Parse(raw)

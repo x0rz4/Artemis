@@ -28,6 +28,7 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 | 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go`（`Repo` 发布源） |
 | 工具库 | `server/toollib.go`（清单与导入）、`server/toollib_upload.go`（上传/安装器）、`server/toollib_check.go`（自检）、`server/toollib_command.go`（审计用命令渲染）、`server/toollib_sync.go`（多源同步）、`web/src/app/(main)/system/tool-lib/page.tsx` |
 | 库源同步底座 | `server/synclib.go`（按源派生白名单、令牌、下载校验原子落盘）——工具库与技能库共用，新增源类型只改这里 |
+| 官方云更新 | `server/registry.go`（固定索引、清单、后台检查）、`server/registry_install.go`（选择安装、活动门禁）、`web/src/components/library-updates.tsx`；发布源码在独立公开仓库 `x0rz4/Artemis-registry` |
 | 技能库 | `server/skillsrc.go`（多扫描根 + 源同步）、`server/server_mgmt.go` 的 `fs*Skill*`、`web/src/app/(main)/system/skills/_components/skill-sources.tsx` |
 | 观测与日志 | `logging/logging.go`（结构化入口与字段约定）、`server/logsink.go`（文本契约、入库与 SSE）、`web/src/app/(main)/system/logs/page.tsx` |
 
@@ -60,16 +61,25 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 
 ## 技能库（data/skills + 主 skills/）
 
-- 扫描根按优先级：程序旁的 `skills/`（内置，可用 `ARTEX_SKILL_DIR` 覆盖）→ `data/skills/uploaded`（上传与 zip 同步）→ `data/skills/git/<源名>`（git 型源整仓）。**同名以靠前的根为准**，内置不会被用户上传顶掉。
+- 扫描根按优先级：显式配置的 `ARTEX_SKILL_DIR` / `skill_dir` → 清单激活的官方 `data/skills/managed/` 版本 → 程序旁的内置 `skills/` → `data/skills/uploaded` → `data/skills/git/<源名>`。**同名以靠前的根为准**。官方更新经用户确认可优先于内置；显式本地根始终优先。每轮 Agent 装配动态解析扫描根，不能在启动时缓存根列表。
 - 写入落在该 skill 当前的根；**新建与上传默认进 `data/skills/uploaded`**，不污染程序目录。`s.skillPath(name)` 是唯一入口，不要在 handler 里手拼 `filepath.Join(s.skillDir, ...)`。
 - 源类型：`git`（`git clone --depth 1` / `fetch` + `reset --hard`，目录是远程镜像，本地改动会被覆盖，需要本机有 git）、`github`/`http`（拉一份 zip 清单，逐个下载校验后走 `installSkillZipBytes`）。
 - 令牌同样存 settings（`skill_source_token:<源名>`），不进 `data/skills/manifest.json`。
 - 侧边栏「工具库」页管工具，「Skill」页头部的同步控件管技能；两者共用 `synclib.go` 的白名单与校验口径。
 
+## 官方工具与 Skill 云更新
+
+- 固定公开源 `x0rz4/Artemis-registry`；启动后和每六小时只检查索引与清单，可关闭。更新须用户选择条目并确认具体 release；不追踪上游 latest，不自动安装。
+- 两类库的 `registry` 元数据分别保存发布版本、条目版本、安装包与内容摘要。工具原 `sha256` 仍是入口文件摘要。新目录完成校验后再切换清单，失败保留旧文件。
+- 官方同步沿用 `/sync`，`names` 始终指源，`items` 指条目，`release` 固定检查过的版本，`replace` 为逐项冲突替换授权。自定义源和离线脚本继续可用。
+- 同名本地内容和本地修改默认跳过，官方工具更新保留数据库的绑定、启用和 deferred，新工具默认禁用。官方 Skill 持久化目录独立于内置和上传目录，回滚清单恢复生效优先级。
+- 应用与回滚在持有库写锁后获得任务/聊天空闲门禁；下载不持有活动门禁。锁顺序为库写锁 → `concMu` → `chatMu` → engine `deleteMu`，任何门禁失败返回 409。不得让任务或聊天在检查空闲后、切换完成前启动。
+
 ## 库快照与写锁（`server/snapshot.go`）
 
 - 同步、覆盖上传、清除文件、清源、回滚**之前**都会自动生成一份快照到 `<库根>/.snapshots/<id>/`，内容 = 将被改动的目标 + `manifest.json`（清单必须一起存，否则文件与清单会对不上）。最多保留 5 份。
-- 快照的语义是"并集"：回滚只把快照里的条目放回去，快照之后新增的条目不删。回滚前会再存一份 `pre-rollback:` 快照，避免"回滚错了"不可逆。
+- 新快照保存各文件 SHA-256。回滚先复制到临时目录并校验，再逐项切换，清单最后生效；切换失败恢复旧文件。兼容未含摘要的历史快照；创建回滚前快照时不得清理用户选中的目标快照。
+- 快照按库条目恢复：被恢复目录内部以快照内容为准，快照未包含的其它库条目不删。回滚前会再存一份 `pre-rollback:` 快照，避免"回滚错了"不可逆。
 - 接口：`GET /api/tool-lib/snapshots`、`POST /api/tool-lib/rollback`、`GET /api/skills/snapshots`、`POST /api/skills/rollback`（`id` 缺省用最近一份）。工具回滚后会按清单重新注册工具行。
 - 每个库一把写锁（`Server.toolLibMu` / `skillLibMu`，用 `TryLock`）：同步、上传、导入、删除、回滚互斥，第二个请求拿 409 而不是排队。**新增会改磁盘或清单的接口时记得走 `libTryLock`**，但不要在 `installSkillZipBytes`/`installToolZip`/`takeSnapshot` 内部再加锁（它们总是被已持锁的调用方调用）。
 

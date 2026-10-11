@@ -21,6 +21,34 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  registry-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: registry_test
+          POSTGRES_PASSWORD: registry-ci-only
+          POSTGRES_DB: registry_validation
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U registry_test -d registry_validation"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate cloud library updates with isolated PostgreSQL
+        env:
+          ARTEX_PG_DSN: postgres://registry_test:registry-ci-only@127.0.0.1:5432/registry_validation?sslmode=disable
+        run: |
+          printf '{}\n' > "$RUNNER_TEMP/registry-config.json"
+          export ARTEX_CONFIG="$RUNNER_TEMP/registry-config.json"
+          go test ./server ./db -run 'TestRegistry|TestAssembleVisibleSkill|TestSnapshot|TestSkill|TestTool|TestSource|TestSync' -count=1
+          go vet ./server ./db
+
   validate:
     runs-on: ubuntu-latest
     outputs:
@@ -60,6 +88,7 @@ jobs:
           for script in install.sh build.sh start.sh; do bash -n "$script"; done
           shellcheck install.sh start.sh
           python3 -m unittest discover -s scripts -p 'test_install.py' -v
+          python3 -m unittest discover -s scripts -p 'test_install_tools.py' -v
           docker compose config --quiet
           docker compose -f docker-compose.yml -f docker-compose.local.yml config --quiet
       - uses: actions/setup-go@v5
@@ -80,7 +109,7 @@ jobs:
               -test.v
 
   build:
-    needs: validate
+    needs: [validate, registry-tests]
     permissions:
       contents: read
       packages: write

@@ -42,23 +42,24 @@ const toolsLibComment = "运行时工具清单：data/tools 下的文件与本�
 // toolEntry 是清单里的一条工具。字段与 artex-ymh 的 packaging/tools-manifest.json 对齐，
 // 并补上本平台需要的注册信息（key/agents/enabled/deferred）。
 type toolEntry struct {
-	Name     string          `json:"name"`
-	Key      string          `json:"key,omitempty"` // 注册成 tools 行的 key；缺省由 name 推导
-	Purpose  string          `json:"purpose,omitempty"`
-	Version  string          `json:"version,omitempty"`
-	Platform string          `json:"platform,omitempty"`
-	SHA256   string          `json:"sha256,omitempty"`
-	Path     string          `json:"path"`
-	URL      string          `json:"url,omitempty"` // 资产绝对地址（可选，覆盖源的资产根推导）
-	Kind     string          `json:"kind,omitempty"`    // binary | script | jar | dir
-	Runtime  string          `json:"runtime,omitempty"` // python3 | node | php | java | 空
-	Entry    string          `json:"entry,omitempty"`   // kind=dir 时的入口文件（相对 path）
-	Category string          `json:"category,omitempty"`
-	Source   string          `json:"source,omitempty"` // official | <源名> | uploaded
-	Schema   json.RawMessage `json:"schema,omitempty"`
-	Agents   []string        `json:"agents,omitempty"`  // 缺省/空 = 全部 agent
-	Enabled  *bool           `json:"enabled,omitempty"` // 缺省 = true
-	Deferred bool            `json:"deferred,omitempty"`
+	Registry *registryInstall `json:"registry,omitempty"`
+	Name     string           `json:"name"`
+	Key      string           `json:"key,omitempty"` // 注册成 tools 行的 key；缺省由 name 推导
+	Purpose  string           `json:"purpose,omitempty"`
+	Version  string           `json:"version,omitempty"`
+	Platform string           `json:"platform,omitempty"`
+	SHA256   string           `json:"sha256,omitempty"`
+	Path     string           `json:"path"`
+	URL      string           `json:"url,omitempty"`     // 资产绝对地址（可选，覆盖源的资产根推导）
+	Kind     string           `json:"kind,omitempty"`    // binary | script | jar | dir
+	Runtime  string           `json:"runtime,omitempty"` // python3 | node | php | java | 空
+	Entry    string           `json:"entry,omitempty"`   // kind=dir 时的入口文件（相对 path）
+	Category string           `json:"category,omitempty"`
+	Source   string           `json:"source,omitempty"` // official | <源名> | uploaded
+	Schema   json.RawMessage  `json:"schema,omitempty"`
+	Agents   []string         `json:"agents,omitempty"`  // 缺省/空 = 全部 agent
+	Enabled  *bool            `json:"enabled,omitempty"` // 缺省 = true
+	Deferred bool             `json:"deferred,omitempty"`
 }
 
 // toolManifest 是 manifest.json 的整体结构。sources 由 synclib.go 的 libSource 承载
@@ -323,6 +324,9 @@ func (s *Server) toolEntryToRow(e toolEntry, allAgents []string) (*db.Tool, erro
 // overwriteBinding 报告这次导入是否允许覆盖行上已有的 agents/enabled：只在清单显式
 // 写了这两项时才覆盖，否则保留用户在页面上的绑定。
 func (e toolEntry) overwriteBinding() bool {
+	if e.Registry != nil {
+		return false
+	}
 	return len(e.Agents) > 0 || e.Enabled != nil
 }
 
@@ -576,6 +580,12 @@ func (s *Server) tlRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.toolLibMu.Unlock()
+	unlock, idleErr := s.lockLibraryIdle()
+	if idleErr != nil {
+		writeErr(w, 409, idleErr.Error())
+		return
+	}
+	defer unlock()
 
 	var req struct {
 		ID string `json:"id"`
@@ -592,10 +602,12 @@ func (s *Server) tlRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 回滚本身也是覆盖：先把当前状态存一份，免得"回滚错了"变成不可逆。
-	if _, serr := takeSnapshot(base, "pre-rollback:"+id, snapshotItems(base, id)); serr != nil {
+	before, serr := takeSnapshot(base, "pre-rollback:"+id, snapshotItems(base, id))
+	if serr != nil {
 		writeErr(w, 500, "回滚前快照失败，已放弃："+serr.Error())
 		return
 	}
+
 	restored, err := restoreSnapshot(base, id)
 	if err != nil {
 		writeErr(w, 400, err.Error())
@@ -604,20 +616,27 @@ func (s *Server) tlRollback(w http.ResponseWriter, r *http.Request) {
 	// 清单跟着快照一起回来了，重新导入一次让 tools 行与磁盘一致。
 	m, lerr := s.loadToolManifest()
 	if lerr != nil {
-		writeErr(w, 500, lerr.Error())
+		_, restoreErr := restoreSnapshot(base, before)
+		writeErr(w, 500, errors.Join(lerr, restoreErr).Error())
 		return
 	}
 	agents := s.allAgentKeys()
-	imported := 0
+	rows := []*db.Tool{}
 	for _, e := range m.Tools {
 		row, rerr := s.toolEntryToRow(e, agents)
 		if rerr != nil {
-			continue
+			_, restoreErr := restoreSnapshot(base, before)
+			writeErr(w, 500, errors.Join(rerr, restoreErr).Error())
+			return
 		}
-		if _, uerr := pg.UpsertLibraryTool(row, e.overwriteBinding()); uerr == nil {
-			imported++
-		}
+		rows = append(rows, row)
 	}
+	if err := pg.ApplyLibraryTools(rows, func() error { return nil }); err != nil {
+		_, restoreErr := restoreSnapshot(base, before)
+		writeErr(w, 500, errors.Join(err, restoreErr).Error())
+		return
+	}
+	imported := len(rows)
 	s.invalidateCommandTemplates()
 	writeJSON(w, 200, map[string]any{"snapshot": id, "restored": restored, "imported": imported})
 }

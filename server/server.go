@@ -54,8 +54,11 @@ type Server struct {
 	// 库写锁：工具库/技能库的同步、上传、导入、删除、回滚都会改磁盘与清单，必须互斥
 	// （两个同步同时写 manifest.json 会互相覆盖，留下的 .bak 也说不清是哪一版）。
 	// 用 TryLock，第二个请求拿到明确的 409 而不是排在一个可能几分钟的下载后面。
-	toolLibMu  sync.Mutex
-	skillLibMu sync.Mutex
+	toolLibMu       sync.Mutex
+	skillLibMu      sync.Mutex
+	registryMu      sync.Mutex
+	registryCheckMu sync.Mutex
+	registry        registryState
 
 	cfgMu     sync.Mutex
 	chatAgent *agent.ChatAgent // conversational runner for the chat page; nil w/o LLM
@@ -232,7 +235,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			}
 			return a.TaskTimeoutWrapupMaxTurns, true
 		}
-		wireAgentAugment(m.pg, s.skillRoots(), s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
+		wireAgentAugment(m.pg, s.skillRoots, s.hostTools) // 每轮解析当前生效版本，更新与回滚无需重启。
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
@@ -274,6 +277,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.wireCommandRenderer()   // 自定义 command 工具在审计/规则匹配里的真实命令行
 	s.ensureToolLib()         // data/tools 清单骨架 + 启动自检（只告警，不阻断）
 	s.ensureSkillLib()        // data/skills 上传目录 + 清单骨架（只告警，不阻断）
+	s.startRegistryChecks()
 	return s
 }
 
@@ -907,6 +911,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/tool-lib/sources", s.tlSaveSource)
 	mux.HandleFunc("DELETE /api/tool-lib/sources/{name}", s.tlDeleteSource)
 	mux.HandleFunc("POST /api/tool-lib/sync", s.tlSync)
+	mux.HandleFunc("GET /api/library-updates", s.registryStatus)
+	mux.HandleFunc("POST /api/library-updates/check", s.registryCheck)
+	mux.HandleFunc("PUT /api/library-updates/settings", s.registrySettings)
 	mux.HandleFunc("GET /api/tool-lib/snapshots", s.tlSnapshots)
 	mux.HandleFunc("POST /api/tool-lib/rollback", s.tlRollback)
 	// MCP CRUD

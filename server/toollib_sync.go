@@ -126,6 +126,10 @@ func (s *Server) tlSaveSource(w http.ResponseWriter, r *http.Request) {
 	}
 	src := req.Source
 	src.Name = strings.ToLower(strings.TrimSpace(src.Name))
+	if src.Name == registrySource {
+		writeErr(w, 400, "官方源由程序维护，请使用官方云更新面板")
+		return
+	}
 	if !reSourceName.MatchString(src.Name) {
 		writeErr(w, 400, "源名需为小写字母或数字开头，仅含小写字母/数字/短横线/下划线（≤64）")
 		return
@@ -223,12 +227,19 @@ func (s *Server) tlSync(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.toolLibMu.Unlock()
 
-	var req struct {
-		Names  []string `json:"names"`
-		DryRun bool     `json:"dry_run"`
-		Force  bool     `json:"force"`
+	var req librarySyncRequest
+	if err := decode(r, &req); err != nil {
+		writeErr(w, 400, "无效请求体")
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if contains(req.Names, registrySource) || req.Release != "" {
+		s.syncRegistry(w, r, "tools", req)
+		return
+	}
+	if len(req.Items) > 0 || len(req.Replace) > 0 {
+		writeErr(w, 400, "条目选择需要指定官方发布版本")
+		return
+	}
 
 	m, err := s.loadToolManifest()
 	if err != nil {
@@ -450,15 +461,9 @@ func (s *Server) installToolFromSource(
 	merged.Name = name
 	if local != nil {
 		merged.Key = local.Key
-		if len(remote.Agents) == 0 {
-			merged.Agents = local.Agents
-		}
-		if remote.Enabled == nil {
-			merged.Enabled = local.Enabled
-		}
-		if local.Deferred {
-			merged.Deferred = true
-		}
+		merged.Agents = local.Agents
+		merged.Enabled = local.Enabled
+		merged.Deferred = local.Deferred
 	}
 
 	if strings.EqualFold(filepath.Ext(cleanPath), ".zip") {
