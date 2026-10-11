@@ -7,18 +7,18 @@ import (
 	"testing"
 )
 
-type runtimeProbe struct{ check func() }
+type runtimeObservationProbe struct{ check func() }
 
-func (p runtimeProbe) Stream(context.Context, llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+func (p runtimeObservationProbe) Stream(context.Context, llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	return func(y func(llm.StreamEvent, error) bool) { p.check(); y(llm.StreamEvent{}, nil) }
 }
-func (p runtimeProbe) Complete(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+func (p runtimeObservationProbe) Complete(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	p.check()
 	return llm.Message{}, "", llm.Usage{}, nil
 }
 func TestRuntimeProviderTracksOnlyActualCall(t *testing.T) {
 	e := NewEngine(nil)
-	p := observedTaskProvider{engine: e, taskID: "42", base: runtimeProbe{check: func() {
+	p := observedTaskProvider{engine: e, taskID: "42", base: runtimeObservationProbe{check: func() {
 		if e.ActiveLLMCalls("42") != 1 {
 			t.Fatal("request not counted")
 		}

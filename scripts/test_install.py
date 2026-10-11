@@ -68,7 +68,7 @@ esac
         result = self.run_install("--yes", "--no-start")
         self.assertEqual(result.returncode, 0, result.stderr)
         before = (self.root / ".env").read_bytes()
-        password = next(line.split("=", 1)[1] for line in before.decode().splitlines()
+        password = next(line.split("=", 1)[1].strip('"') for line in before.decode().splitlines()
                         if line.startswith("POSTGRES_PASSWORD="))
         self.assertRegex(password, r"^[a-f0-9]{48}$")
         self.assertNotIn(password, result.stdout + result.stderr)
@@ -84,6 +84,16 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / ".env").read_text(), content)
         self.assertFalse((self.root / "executed").exists())
+
+    def test_first_install_persists_effective_settings_with_dotenv_escaping(self):
+        self.env.update(ARTEX_TAG="edge", POSTGRES_USER="custom", POSTGRES_PASSWORD='quote" $var \\ line\nend')
+        result = self.run_install("--yes", "--no-start")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = (self.root / ".env").read_text(encoding="utf-8")
+        self.assertIn('ARTEX_TAG="edge"', saved)
+        self.assertIn('POSTGRES_USER="custom"', saved)
+        self.assertIn('POSTGRES_PASSWORD="quote\\" $$var \\\\ line\\nend"', saved)
+        self.assertNotIn(self.env["POSTGRES_PASSWORD"], result.stdout + result.stderr)
 
     def test_failed_pull_builds_before_start(self):
         self.env["MOCK_PULL_FAIL"] = "1"
@@ -153,18 +163,46 @@ esac
 
     def test_compose_config_uses_effective_credentials_and_port(self):
         config = {"services": {"postgres": {"environment": {
-            "POSTGRES_USER": "custom", "POSTGRES_PASSWORD": "p@ss:'\\$", "POSTGRES_DB": "database"},
+            "POSTGRES_USER": "custom", "POSTGRES_PASSWORD": "p@ss:'\\$$", "POSTGRES_DB": "database"},
             "ports": [{"target": 5432, "published": "15432"}]}}}
         result = subprocess.run([sys.executable, str(ROOT / "scripts/install_config.py"), "--compose"],
             cwd=self.root, input=json.dumps(config), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         database = json.loads((self.root / "config.json").read_text())["database"]
         self.assertEqual(database["port"], 15432)
-        self.assertEqual(database["password"], config["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"])
+        self.assertEqual(database["password"], "p@ss:'\\$")
         # Direct invocation must never replace an existing config.
         result = subprocess.run([sys.executable, str(ROOT / "scripts/install_config.py"), "--compose"],
             cwd=self.root, input=json.dumps(config), capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
+
+    def test_real_compose_round_trip_of_saved_credentials(self):
+        binary = os.environ.get("ARTEMIS_TEST_COMPOSE")
+        if binary:
+            compose = [binary]
+        elif shutil.which("docker"):
+            compose = [shutil.which("docker"), "compose"]
+        else:
+            self.skipTest("Docker Compose CLI is required for this parsing check")
+        password = 'quote\' " dollar $var $$ ${x} slash\\line\nend'
+        self.env.update(POSTGRES_PASSWORD=password, ARTEX_TAG="edge", ARTEX_PG_PORT="15432")
+        result = self.run_install("--yes", "--no-start")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Remove caller overrides: the generated .env must work on its own.
+        env = {k: v for k, v in self.env.items() if not k.startswith(("ARTEX_", "POSTGRES_", "COMPOSE_"))}
+        result = subprocess.run(compose + ["--env-file", str(self.root / ".env"),
+            "--project-directory", str(self.root), "-f", str(ROOT / "docker-compose.yml"),
+            "-f", str(ROOT / "docker-compose.local.yml"), "config", "--format", "json"],
+            cwd=self.root, env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads(result.stdout)
+        self.assertEqual(document["services"]["artemis"]["image"], "ghcr.io/x0rz4/artemis:edge")
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/install_config.py"), "--compose"],
+            cwd=self.root, input=result.stdout, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = json.loads((self.root / "config.json").read_text(encoding="utf-8"))["database"]
+        self.assertEqual(saved["password"], password)
+        self.assertEqual(saved["port"], 15432)
 
 
 if __name__ == "__main__":

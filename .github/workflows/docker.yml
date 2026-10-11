@@ -62,6 +62,21 @@ jobs:
           python3 -m unittest discover -s scripts -p 'test_install.py' -v
           docker compose config --quiet
           docker compose -f docker-compose.yml -f docker-compose.local.yml config --quiet
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Compile backend and server tests before building images
+        run: |
+          go build -o "$RUNNER_TEMP/artemis-check" ./cmd/artex
+          go test -c -o "$RUNNER_TEMP/server.test" ./server
+      - name: Run focused tests without a database configuration
+        run: |
+          printf '{}\n' > "$RUNNER_TEMP/empty-config.json"
+          ARTEX_CONFIG="$RUNNER_TEMP/empty-config.json" ARTEX_PG_DSN= \
+            "$RUNNER_TEMP/server.test" \
+              -test.run='^(TestSkillRootsAndWriteTarget|TestLoadAllSkillsPrefersEarlierRoot|TestLoadSkillRegistryFiltersByVisibility|TestLoadAllSkillsSkipsMissingRoots|TestValidSkillName|TestSkillRelPath|TestRuntimeProviderTracksOnlyActualCall)$' \
+              -test.v
 
   build:
     needs: validate

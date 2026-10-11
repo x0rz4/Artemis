@@ -64,11 +64,11 @@ type skillSyncRecord struct {
 }
 
 type skillManifest struct {
-	Comment   string             `json:"_comment,omitempty"`
-	Version   string             `json:"version"`
-	UpdatedAt string             `json:"updated_at,omitempty"`
-	Sources   []libSource        `json:"sources"`
-	Skills    []skillSyncRecord  `json:"skills"`
+	Comment   string            `json:"_comment,omitempty"`
+	Version   string            `json:"version"`
+	UpdatedAt string            `json:"updated_at,omitempty"`
+	Sources   []libSource       `json:"sources"`
+	Skills    []skillSyncRecord `json:"skills"`
 }
 
 func emptySkillManifest() *skillManifest {
@@ -601,7 +601,7 @@ func (s *Server) syncSkillGit(ctx context.Context, src libSource, m *skillManife
 		}
 		args = append(args, strings.TrimSpace(src.URL), stage)
 		if out, cerr := runGit(ctx, gitBin, "", args...); cerr != nil {
-			return nil, fmt.Errorf("克隆失败：%v（%s）", cerr, firstLine(out))
+			return nil, fmt.Errorf("克隆失败：%v（%s）", cerr, gitOutputFirstLine(out))
 		}
 		if err := swapDir(stage, target, true); err != nil {
 			return nil, err
@@ -634,7 +634,7 @@ func (s *Server) syncSkillGit(ctx context.Context, src libSource, m *skillManife
 		return []skillSyncItem{item}, fmt.Errorf("快照失败，已放弃更新：%w", serr)
 	}
 	if out, rerr := runGit(ctx, gitBin, target, "reset", "--hard", "FETCH_HEAD"); rerr != nil {
-		return []skillSyncItem{item}, fmt.Errorf("reset 失败：%v（%s）", rerr, firstLine(out))
+		return []skillSyncItem{item}, fmt.Errorf("reset 失败：%v（%s）", rerr, gitOutputFirstLine(out))
 	}
 	m.Skills = appendOrReplaceSkillRecord(m.Skills, skillSyncRecord{
 		Name: src.Name, Source: src.Name, Dir: filepath.ToSlash(filepath.Join(skillsGitDirName, src.Name)),
@@ -843,8 +843,8 @@ func gitRevParse(ctx context.Context, gitBin, dir, rev string) string {
 	return strings.TrimSpace(out)
 }
 
-// firstLine 取输出首行做错误提示（git 的报错常带多行进度信息）。
-func firstLine(s string) string {
+// gitOutputFirstLine 取输出首行做错误提示（git 的报错常带多行进度信息）。
+func gitOutputFirstLine(s string) string {
 	for _, ln := range strings.Split(s, "\n") {
 		if t := strings.TrimSpace(ln); t != "" {
 			return t

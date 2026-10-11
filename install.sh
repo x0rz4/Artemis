@@ -53,6 +53,16 @@ secret() {
   printf '%s' "${answer:-$2}"
 }
 random_password() { od -An -N24 -tx1 /dev/urandom | tr -d ' \n'; }
+write_env_value() {
+  local value=$2
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//\$/\$\$}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s="%s"\n' "$1" "$value"
+}
 need() { command -v "$1" >/dev/null 2>&1 || die "未检测到 $1，请安装后重试"; }
 temp_files=()
 cleanup() {
@@ -77,7 +87,7 @@ ensure_docker() {
     if [ "$(id -u)" = 0 ]; then sh "$installer"; else need sudo; sudo sh "$installer"; fi
   fi
   docker info >/dev/null 2>&1 || die 'Docker daemon 不可访问；请启动 Docker 并确认当前用户有权限，然后重新执行脚本'
-  docker compose up --help | grep -q -- '--wait-timeout' \
+  docker compose up --help | grep -- '--wait-timeout' >/dev/null \
     || die '需要 Docker Compose >= 2.20（支持 up --wait-timeout）'
 }
 
@@ -86,16 +96,25 @@ ensure_env() {
   local generated line password
   generated=$(mktemp .env.XXXXXX)
   temp_files+=("$generated")
-  # Only a generated hex password is substituted; never evaluate/source .env.
+  # Persist effective first-install settings, so subsequent Compose runs use
+  # the same credentials even after the caller's environment goes away.
   password=$(random_password)
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      POSTGRES_PASSWORD=*) printf 'POSTGRES_PASSWORD=%s\n' "$password" ;;
+      POSTGRES_PASSWORD=*) write_env_value POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-$password}" ;;
+      POSTGRES_USER=*) write_env_value POSTGRES_USER "${POSTGRES_USER:-artemis}" ;;
+      POSTGRES_DB=*) write_env_value POSTGRES_DB "${POSTGRES_DB:-artemis}" ;;
+      ARTEX_IMAGE=*) write_env_value ARTEX_IMAGE "${ARTEX_IMAGE:-ghcr.io/x0rz4/artemis}" ;;
+      ARTEX_TAG=*) write_env_value ARTEX_TAG "${ARTEX_TAG:-latest}" ;;
+      ARTEX_BIND=*) write_env_value ARTEX_BIND "${ARTEX_BIND:-127.0.0.1}" ;;
+      ARTEX_PORT=*) write_env_value ARTEX_PORT "${ARTEX_PORT:-8787}" ;;
+      ARTEX_PROXY_PORT=*) write_env_value ARTEX_PROXY_PORT "${ARTEX_PROXY_PORT:-8788}" ;;
+      ARTEX_PG_PORT=*) write_env_value ARTEX_PG_PORT "${ARTEX_PG_PORT:-5433}" ;;
       *) printf '%s\n' "$line" ;;
     esac
   done < .env.example > "$generated"
   mv "$generated" .env
-  info '已生成 .env 和随机数据库密码（未打印凭据）'
+  info '已生成 .env 和数据库配置（未提供密码时随机生成，未打印凭据）'
 }
 
 compose() { docker compose --env-file .env -f docker-compose.yml "$@"; }

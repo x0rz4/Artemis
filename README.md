@@ -41,7 +41,7 @@ cd Artemis
 bash install.sh
 ```
 
-默认使用 Docker Compose 部署 Artemis 与 PostgreSQL。需要 Docker 和 Compose **2.20 或更新版本**；Linux 缺少 Docker 时可使用 `bash install.sh --install-docker` 安装，macOS 请先启动 Docker Desktop。脚本检测 Docker daemon 权限，首次生成随机数据库密码到权限为 `600` 的 `.env`，已有 `.env` 和 `config.json` 会保留。
+默认使用 Docker Compose 部署 Artemis 与 PostgreSQL。需要 Docker 和 Compose **2.20 或更新版本**；Linux 缺少 Docker 时可使用 `bash install.sh --install-docker` 安装，macOS 请先启动 Docker Desktop。脚本检测 Docker daemon 权限，首次生成随机数据库密码到权限为 `600` 的 `.env`；如果通过环境变量提供数据库参数、镜像标签和端口，会保存这些首次安装参数。已有 `.env` 和 `config.json` 会保留。
 
 ```bash
 # 无交互安装；优先拉镜像，拉取失败时从当前源码构建

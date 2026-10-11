@@ -56,6 +56,9 @@ PR 只构建验证；main 发布 edge，稳定版本标签发布版本标签和 
 - 兼容：ARTEX_* 保留；现有 PostgreSQL 卷和配置不迁移、不覆盖。Web 绑定默认改为回环，可用 ARTEX_BIND 显式开放。
 - 失败与恢复：拉取失败可源码构建；构建/健康检查失败终止并提示日志；升级前备份，恢复需匹配数据库版本，脚本不删除运行数据或卷。
 - GHCR 首次发布需确认包的 Public 可见性，已有包需授予仓库写权限。
+- 首次 CI（run 38147665246）两种架构都在 Go 编译失败：技能源同步新增的 firstLine 与会话摘要同名函数冲突，以及 server_mgmt.go 的 skill import 未使用。将技能源辅助函数改为 gitOutputFirstLine、清理 import；validate 阶段增加独立 Go 编译，提前暴露编译错误。
+- Compose 实际解析发现 config 输出会把美元符号转义为 $$；本地配置生成器需还原。首次安装将调用方提供的数据库参数、标签及端口正确转义后保存，避免后续脱离调用方环境时凭据发生变化。
+- 相关 Go 测试编译发现 runtime_observation_test.go 的 runtimeProbe 与工具自检生产类型重名；仅将测试辅助类型改名为 runtimeObservationProbe，保持行为。
 - 规范：[工作流](../../WORKFLOW.md)、[风格](../../STYLE.md)、[项目约束](../../PROJECT.md)。
 
 ## 任务
@@ -63,21 +66,29 @@ PR 只构建验证；main 发布 edge，稳定版本标签发布版本标签和 
 - [x] DEP-001：源码 Dockerfile、Compose、构建上下文与许可文件。
 - [x] DEP-002：GHCR CI、原生双架构构建及隔离容器冒烟脚本。
 - [x] DEP-003：安装脚本和配置生成器。
-- [ ] 完成本地脚本、Actions、Compose 检查和回归测试。
+- [x] 修复首轮 CI 暴露的同包函数重名和未使用 import，增加镜像构建前 Go 编译检查。
+- [x] 完成本地脚本、Actions、Compose 检查和 13 项安装回归测试。
 - [ ] 完成真实双架构构建与隔离容器测试。
-- [ ] 更新 README 和来源说明；全部验收通过后同步现行能力规范。
+- [x] 更新 README 和来源说明。
+- [ ] 全部验收通过后同步现行能力规范。
 - [ ] 检查完成条件并归档。
 
 ## 验证记录
 
 | 检查项 | 执行位置与命令 | 实际结果 | 未完成原因 |
 | --- | --- | --- | --- |
-| 安装回归 | 仓库根目录 `python -m unittest discover -s scripts -p test_install.py -v` | 首轮修复 Windows 测试 PATH 后 11 项通过，后续修改待复验 | — |
-| Shell | 仓库根目录 `shellcheck install.sh start.sh` | 通过，后续修改待复验 | — |
-| Actions | 仓库根目录 `actionlint -shellcheck= -pyflakes= .github/workflows/docker.yml .github/workflows/release.yml` | 通过，后续修改待复验 | — |
-| 容器构建/运行 | `python3 scripts/smoke_container.py artemis:ci`，已接入两种架构 CI | 未执行 | 本机无 Docker daemon，远端工作流未运行 |
+| 安装回归 | 仓库根目录 `python -m unittest discover -s scripts -p test_install.py -v`，ARTEMIS_TEST_COMPOSE 指向临时安装的官方 Compose CLI | 13 项通过，含真实 Compose 配置解析和特殊字符密码往返 | — |
+| Shell | 仓库根目录 `shellcheck install.sh start.sh`、`bash -n install.sh` | 通过 | — |
+| Actions | 仓库根目录 `actionlint -shellcheck= -pyflakes= .github/workflows/docker.yml .github/workflows/release.yml` | 编译预检加入后通过；最终定向测试步骤待复验 | — |
+| Go 交叉编译 | 仓库根目录，分别设置 CGO_ENABLED=0、GOOS=linux、GOARCH=amd64/arm64，执行 `go build -trimpath -o <临时产物> ./cmd/artex` | 两种架构均通过；本地 Go 1.27.1，无 embedui，产物仅作编译检查 | 正式 embedui 镜像仍以 CI 为准 |
+| Go 测试编译 | `go test -c -o <临时产物>/server.test.exe ./server` | 通过；另修复测试辅助类型重名 | — |
+| Go 定向测试 | `go test ./server -run '^(TestSkillRootsAndWriteTarget\|TestLoadAllSkillsPrefersEarlierRoot\|TestLoadSkillRegistryFiltersByVisibility\|TestLoadAllSkillsSkipsMissingRoots\|TestValidSkillName\|TestSkillRelPath\|TestRuntimeProviderTracksOnlyActualCall)$' -count=1`，ARTEX_CONFIG 指向临时空配置、ARTEX_PG_DSN 清空 | 测试程序编译成功，但系统拒绝启动：Access is denied | 未执行测试用例；同一定向测试已接入 Linux CI，无业务数据库连接 |
+| Go vet | `go vet ./server` | 检查中 | — |
+| 文档/差异 | README、变更记录相对链接检查；`git diff --check` | 通过 | — |
+| 容器构建/运行 | [首次 CI](https://github.com/x0rz4/Artemis/actions/runs/38147665246)，两种架构均执行源码构建 | validate 通过；两种架构因相同 Go 编译错误失败；已本地修复 | 本机无 Docker daemon，修复尚未推送，容器及 GHCR 发布待新提交 CI 验证 |
 
 ## 收尾
 
 - 待完成真实容器验收后建立容器交付能力规范；当前不标记 verified/archived。
-- 远端镜像尚未上传；本次交付包含实现和可执行 CI，不将未运行的检查记录为通过。
+- 远端镜像尚未上传；修复尚未推送，不将未运行的检查记录为通过。需要针对新提交运行 CI，仅重跑旧提交仍会遇到原编译错误。
+- 本机系统盘空间不足曾阻止缓存写入，后续使用 release-work/ci-check 下的任务专用缓存及临时目录完成编译；未删除开发者缓存或业务数据。

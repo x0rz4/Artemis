@@ -9,7 +9,9 @@ import sys
 def main():
     if sys.argv[1:] == ["--compose"]:
         service = json.load(sys.stdin)["services"]["postgres"]
-        env = service["environment"]
+        # `compose config` produces a reusable Compose document, escaping every
+        # literal dollar as $$. Undo that serialization before writing app JSON.
+        env = {key: value.replace("$$", "$") for key, value in service["environment"].items()}
         port = next(p["published"] for p in service["ports"] if p["target"] == 5432)
         database = dict(host="127.0.0.1", port=int(port), user=env["POSTGRES_USER"],
                         password=env["POSTGRES_PASSWORD"], dbname=env["POSTGRES_DB"], sslmode="disable")

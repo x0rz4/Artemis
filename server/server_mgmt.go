@@ -26,7 +26,6 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/skill"
 )
 
 // validSkillName checks the agentskills.io name constraints, widened so a skill can
