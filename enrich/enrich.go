@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"html"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/logging"
 
 	"github.com/miekg/dns"
 	"github.com/projectdiscovery/dnsx/libs/dnsx"
@@ -71,7 +71,7 @@ func New(as *db.AssetStore, proxy func() string, workers int) *Engine {
 		Timeout:       4 * time.Second,
 	})
 	if err != nil {
-		log.Printf("[enrich] dnsx 初始化失败，DNS 解析停用：%v", err)
+		logging.Log().With("tag", "enrich").Warn("dnsx 初始化失败，DNS 解析停用", "err", err)
 		resolv = nil
 	}
 	e := &Engine{
@@ -128,7 +128,7 @@ func (e *Engine) enqueue(j job) {
 	select {
 	case e.jobs <- j:
 	default: // queue full → drop (best-effort enrichment)
-		log.Printf("[enrich] 队列已满，丢弃任务 kind=%d id=%d", j.kind, j.id)
+		logging.Log().With("tag", "enrich").Warn("队列已满，丢弃补全任务", "kind", j.kind, "id", j.id)
 	}
 }
 

@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/logging"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	mproxy "github.com/lqqyt2423/go-mitmproxy/proxy"
@@ -456,7 +457,7 @@ func (t *Traffic) record(f *mproxy.Flow) {
 
 	tx, err := t.db.Begin()
 	if err != nil {
-		log.Printf("[traffic] 记录 %s 失败（开启事务）：%v", url, err)
+		logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "begin", "url", logSafeURL(url), "err", err)
 		return
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once committed
@@ -468,19 +469,19 @@ VALUES(?,?,?,?,?,?,?,?,?,?,'')`,
 		id, now.Unix(), host, method, tmpl, url, f.Response.StatusCode, ct,
 		len(f.Request.Body), len(f.Response.Body))
 	if err != nil {
-		log.Printf("[traffic] 记录 %s 失败（写索引）：%v", url, err)
+		logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "index", "url", logSafeURL(url), "err", err)
 		return
 	}
 	rowid, err := res.LastInsertId()
 	if err != nil {
-		log.Printf("[traffic] 记录 %s 失败（取 rowid）：%v", url, err)
+		logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "rowid", "url", logSafeURL(url), "err", err)
 		return
 	}
 
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO exchange_bodies(id,req_head,req_body,req_blob,resp_head,resp_body,resp_blob)
 VALUES(?,?,?,?,?,?,?)`,
 		id, reqHead, reqB.inline, nullIfEmpty(reqB.hash), respHead, respB.inline, nullIfEmpty(respB.hash)); err != nil {
-		log.Printf("[traffic] 记录 %s 失败（写正文）：%v", url, err)
+		logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "body", "url", logSafeURL(url), "err", err)
 		return
 	}
 
@@ -489,7 +490,7 @@ VALUES(?,?,?,?,?,?,?)`,
 			continue
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO blob_refs(hash,exchange_id) VALUES(?,?)`, h, id); err != nil {
-			log.Printf("[traffic] 记录 %s 失败（登记 blob 引用）：%v", url, err)
+			logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "blob_ref", "url", logSafeURL(url), "err", err)
 			return
 		}
 	}
@@ -499,14 +500,26 @@ VALUES(?,?,?,?,?,?,?)`,
 		// fully searchable even though only its preview is stored inline.
 		idx := strings.Join([]string{url, reqHead, reqB.index, respHead, respB.index}, "\n")
 		if _, err := tx.Exec(`INSERT INTO ex_fts(rowid,content) VALUES(?,?)`, rowid, idx); err != nil {
-			log.Printf("[traffic] 记录 %s 失败（写全文索引）：%v", url, err)
+			logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "fts", "url", logSafeURL(url), "err", err)
 			return
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("[traffic] 记录 %s 失败（提交）：%v", url, err)
+		logging.Tool("traffic", "record").Warn("记录流量失败", "stage", "commit", "url", logSafeURL(url), "err", err)
 	}
+}
+
+// logSafeURL 在写日志前去掉查询串与片段：日志页会长期保留这些行，而凭据常出现在
+// ?token= 这类参数里。流量库本身仍保存完整 URL，只是不再把它回显到日志。
+func logSafeURL(raw string) string {
+	if base, _, ok := strings.Cut(raw, "?"); ok {
+		raw = base + "?…"
+	}
+	if base, _, ok := strings.Cut(raw, "#"); ok {
+		raw = base + "#…"
+	}
+	return raw
 }
 
 // storedBody is one body after the inline/spill decision: inline is what goes in

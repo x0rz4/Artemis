@@ -7,11 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"iter"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/logging"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
 )
@@ -286,7 +286,7 @@ func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage 
 		Status:        status,
 	})
 	if err != nil {
-		log.Printf("[llmusage] insert: %v", err)
+		logging.Log().With("tag", "llmusage").Warn("用量记录落库失败", "err", err)
 	}
 }
 
@@ -347,7 +347,7 @@ func (r *Recorder) record(req llm.CompletionRequest, session, taskID, worker, re
 	}
 
 	if err := r.pg.InsertLLMRecord(rec); err != nil {
-		log.Printf("[llmrec] insert: %v", err)
+		logging.Log().With("tag", "llmrec").Warn("调用记录落库失败", "err", err)
 	}
 }
 

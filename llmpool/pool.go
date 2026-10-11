@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
+	"github.com/Autumn-27/artex/logging"
 	"github.com/Autumn-27/norma/llm"
 )
 
@@ -106,18 +106,20 @@ func (p *Pool) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[
 			lastErr = failed
 			hard := isHardFailure(failed)
 			if p.health.Trip(m.ID, trimErr(failed), hard) {
-				log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(failed))
+				logging.Log().With("tag", "llmpool", "profile", m.Name, "model", m.Model).
+					Warn("配置已熔断", "err", trimErr(failed))
 			}
 			if i+1 < len(order) {
 				n := order[i+1]
-				log.Printf("[llmpool] LLM 故障转移：%q(%s) → %q(%s)，原因：%s",
-					m.Name, m.Model, n.Name, n.Model, trimErr(failed))
+				logging.Log().With("tag", "llmpool", "profile", m.Name, "model", m.Model).
+					Warn("LLM 故障转移", "next_profile", n.Name, "next_model", n.Model, "err", trimErr(failed))
 			}
 		}
 		if lastErr == nil {
 			lastErr = ErrExhausted
 		}
-		log.Printf("[llmpool] 轮询链已耗尽(%d 个配置全部失败)，最后错误：%s", len(order), trimErr(lastErr))
+		logging.Log().With("tag", "llmpool").
+			Error("轮询链已耗尽，全部配置失败", "profiles", len(order), "err", trimErr(lastErr))
 		yield(llm.StreamEvent{}, fmt.Errorf("%w：%v", ErrExhausted, lastErr))
 	}
 }
@@ -145,18 +147,20 @@ func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Mes
 		lastErr = err
 		hard := isHardFailure(err)
 		if p.health.Trip(m.ID, trimErr(err), hard) {
-			log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(err))
+			logging.Log().With("tag", "llmpool", "profile", m.Name, "model", m.Model).
+				Warn("配置已熔断", "err", trimErr(err))
 		}
 		if i+1 < len(order) {
 			n := order[i+1]
-			log.Printf("[llmpool] LLM 故障转移：%q(%s) → %q(%s)，原因：%s",
-				m.Name, m.Model, n.Name, n.Model, trimErr(err))
+			logging.Log().With("tag", "llmpool", "profile", m.Name, "model", m.Model).
+				Warn("LLM 故障转移", "next_profile", n.Name, "next_model", n.Model, "err", trimErr(err))
 		}
 	}
 	if lastErr == nil {
 		lastErr = ErrExhausted
 	}
-	log.Printf("[llmpool] 轮询链已耗尽(%d 个配置全部失败)，最后错误：%s", len(order), trimErr(lastErr))
+	logging.Log().With("tag", "llmpool").
+		Error("轮询链已耗尽，全部配置失败", "profiles", len(order), "err", trimErr(lastErr))
 	return llm.Message{}, "", llm.Usage{}, fmt.Errorf("%w：%v", ErrExhausted, lastErr)
 }
 
