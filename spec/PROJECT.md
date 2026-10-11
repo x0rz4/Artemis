@@ -30,7 +30,7 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 | 库源同步底座 | `server/synclib.go`（按源派生白名单、令牌、下载校验原子落盘）——工具库与技能库共用，新增源类型只改这里 |
 | 技能库 | `server/skillsrc.go`（多扫描根 + 源同步）、`server/server_mgmt.go` 的 `fs*Skill*`、`web/src/app/(main)/system/skills/_components/skill-sources.tsx` |
 
-提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`。
+提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`，按准 vendored 依赖维护：升级必须显式改 `go.mod` 并跑通构建与 CI，不假设上游同步；不把它的源码复制进树（模块不带许可证文件）；上游或代理不可用时用自有 fork 加 `replace` 指向同一版本恢复，不就地改依赖源码。核验仍可取用：把 `GOMODCACHE` 指向空目录后执行 `go mod download github.com/Autumn-27/norma`。
 
 ## 工具库（data/tools）
 
