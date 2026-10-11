@@ -97,6 +97,7 @@ Thumbs.db
 *.pfx
 *.dump
 *.backup
+*.dbak
 *.zip
 *.har
 *.pcap

@@ -279,7 +279,16 @@ func (i *Interceptor) IsToolEnabled(name string) bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.enabledTools == nil {
-		_ = i.loadLocked()
+		if err := i.loadLocked(); err != nil {
+			// 读设置失败不代表"这个工具不受管控"：按内置默认集处理，让受管工具继续进入
+			// 规则与审批路径（规则同样读不到时由 Match 转人工确认），不在这里整体放行。
+			for _, n := range defaultEnabledTools {
+				if n == name {
+					return true
+				}
+			}
+			return false
+		}
 	}
 	return i.enabledTools[name]
 }
@@ -349,8 +358,10 @@ const (
 
 // Judge default values.
 const (
-	defaultJudgeTimeoutSecs      = 15
-	defaultJudgeFailAction       = "allow"
+	defaultJudgeTimeoutSecs = 15
+	// 模型兜底审批失败时默认拒绝：兜底本身就是安全语义，模型不可用不能等于放行。
+	// 需要放宽的实例在「系统 → 命令拦截」里显式改成 allow 或 ask。
+	defaultJudgeFailAction       = "deny"
 	defaultJudgeAskTimeoutSecs   = 300
 	defaultJudgeAskTimeoutAction = "deny"
 )
@@ -550,7 +561,18 @@ func judgeActionLabel(action string) string {
 // (Decision{}, false) if no rule matches.
 func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
 	rules, err := i.rules()
-	if err != nil || len(rules) == 0 {
+	if err != nil {
+		// 读规则失败不是"没配规则"：绝不能因此整体放行。转人工确认，并给一个有限
+		// 等待与超时拒绝，避免数据库故障时把管控悄悄摘掉。
+		return Decision{
+			Action:         "ask",
+			Message:        "拦截规则读取失败，需要人工确认后再执行本次调用",
+			TimeoutEnabled: true,
+			TimeoutSeconds: 60,
+			TimeoutAction:  "deny",
+		}, true
+	}
+	if len(rules) == 0 {
 		return Decision{}, false
 	}
 	for _, r := range rules {

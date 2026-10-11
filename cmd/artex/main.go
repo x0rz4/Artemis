@@ -8,11 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,9 +52,26 @@ func main() {
 	os.Exit(run())
 }
 
+// isLoopbackAddr 判断监听地址是否只绑本机。空主机（":8787"）表示所有网卡，
+// 一律按"对外可达"处理——工作台带着工具库与已收集的目标证据，默认不该被扫到。
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		host = strings.TrimSpace(addr)
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
 func run() int {
 	var (
-		addr    = flag.String("addr", ":8787", "HTTP listen address")
+		addr    = flag.String("addr", "127.0.0.1:8787", "HTTP listen address (默认仅本机；远程访问请走带鉴权的反向代理)")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
 		proxy   = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
 	)
@@ -63,6 +82,11 @@ func run() int {
 	server.BuildVersion = version
 
 	printBanner(*addr)
+
+	// 非回环绑定必须说出来：容器内可达性由端口映射决定，不在这里告警。
+	if !selfupdate.InDocker() && !isLoopbackAddr(*addr) {
+		log.Printf("[security] 监听地址 %s 不是回环地址：工作台会对本机之外的网络可达。请确认只通过带鉴权的反向代理暴露，并已设置防火墙或访问控制", *addr)
+	}
 
 	// capture backend logs into the in-memory sink (still to stderr) so the /logs
 	// page can show a live log stream. Do this first, to catch startup logs too.
