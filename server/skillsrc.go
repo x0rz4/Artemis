@@ -348,6 +348,12 @@ func (s *Server) skSaveSource(w http.ResponseWriter, r *http.Request) {
 	if s.pg(w) == nil {
 		return
 	}
+	if !libTryLock(&s.skillLibMu) {
+		writeErr(w, 409, "技能库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.skillLibMu.Unlock()
+
 	var req struct {
 		Source     libSource `json:"source"`
 		Token      string    `json:"token"`
@@ -413,6 +419,12 @@ func (s *Server) skDeleteSource(w http.ResponseWriter, r *http.Request) {
 	if s.pg(w) == nil {
 		return
 	}
+	if !libTryLock(&s.skillLibMu) {
+		writeErr(w, 409, "技能库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.skillLibMu.Unlock()
+
 	name := r.PathValue("name")
 	m, err := s.loadSkillManifest()
 	if err != nil {
@@ -435,6 +447,19 @@ func (s *Server) skDeleteSource(w http.ResponseWriter, r *http.Request) {
 	m.Sources = kept
 	purge := r.URL.Query().Get("purge") == "true"
 	if purge {
+		// 删文件之前先快照：清一个源会连带删掉整仓与它同步进来的 skill。
+		rels := []string{filepath.ToSlash(filepath.Join(skillsGitDirName, name))}
+		for _, rec := range m.Skills {
+			if rec.Source == name {
+				rels = append(rels, filepath.ToSlash(filepath.Join(skillsUploadDirName, rec.Name)))
+			}
+		}
+		if base := s.skillsLibDir(); base != "" {
+			if _, serr := takeSnapshot(base, "purge-source:"+name, rels); serr != nil {
+				writeErr(w, 500, "快照失败，已放弃删除："+serr.Error())
+				return
+			}
+		}
 		if root := s.gitSkillsRoot(); root != "" {
 			_ = os.RemoveAll(filepath.Join(root, name))
 		}
@@ -467,6 +492,12 @@ func (s *Server) skSync(w http.ResponseWriter, r *http.Request) {
 	if s.pg(w) == nil {
 		return
 	}
+	if !libTryLock(&s.skillLibMu) {
+		writeErr(w, 409, "技能库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.skillLibMu.Unlock()
+
 	var req struct {
 		Names  []string `json:"names"`
 		DryRun bool     `json:"dry_run"`
@@ -548,6 +579,8 @@ func (s *Server) syncSkillGit(ctx context.Context, src libSource, m *skillManife
 	item := skillSyncItem{Source: src.Name, Name: src.Name}
 	from := gitHead(ctx, gitBin, target)
 	item.From = from
+	base := s.skillsLibDir()
+	rel := filepath.ToSlash(filepath.Join(skillsGitDirName, src.Name))
 
 	if _, statErr := os.Stat(target); statErr != nil {
 		item.Action = "add"
@@ -595,6 +628,10 @@ func (s *Server) syncSkillGit(ctx context.Context, src libSource, m *skillManife
 	item.Action = "update"
 	if dryRun {
 		return []skillSyncItem{item}, nil
+	}
+	// reset --hard 会丢掉本地改动，先按当前状态留一份快照。
+	if _, serr := takeSnapshot(base, "git:"+src.Name, []string{rel}); serr != nil {
+		return []skillSyncItem{item}, fmt.Errorf("快照失败，已放弃更新：%w", serr)
 	}
 	if out, rerr := runGit(ctx, gitBin, target, "reset", "--hard", "FETCH_HEAD"); rerr != nil {
 		return []skillSyncItem{item}, fmt.Errorf("reset 失败：%v（%s）", rerr, firstLine(out))
@@ -716,6 +753,62 @@ func skillRecordOf(list []skillSyncRecord, name string) *skillSyncRecord {
 		}
 	}
 	return nil
+}
+
+// skSnapshots 列出技能库快照（覆盖安装 / git 更新 / 清源前的自动快照，最多 5 份）。
+func (s *Server) skSnapshots(w http.ResponseWriter, r *http.Request) {
+	if s.pg(w) == nil {
+		return
+	}
+	base := s.skillsLibDir()
+	if base == "" {
+		writeErr(w, 400, "未配置数据目录")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"snapshots": listSnapshots(base), "dir": filepath.ToSlash(snapshotRoot(base))})
+}
+
+// skRollback 把技能库退回某份快照（缺省最近一份）。
+// 回滚只放回快照里的内容，快照之后新增的 skill 不动；随后按需重扫扫描根。
+func (s *Server) skRollback(w http.ResponseWriter, r *http.Request) {
+	if s.pg(w) == nil {
+		return
+	}
+	if !libTryLock(&s.skillLibMu) {
+		writeErr(w, 409, "技能库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.skillLibMu.Unlock()
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	base := s.skillsLibDir()
+	if base == "" {
+		writeErr(w, 400, "未配置数据目录")
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		id = latestSnapshotID(base)
+	}
+	if id == "" {
+		writeErr(w, 404, "没有可用的快照")
+		return
+	}
+	// 回滚本身也是覆盖：先把当前状态存一份，免得"回滚错了"变成不可逆。
+	if _, serr := takeSnapshot(base, "pre-rollback:"+id, snapshotItems(base, id)); serr != nil {
+		writeErr(w, 500, "回滚前快照失败，已放弃："+serr.Error())
+		return
+	}
+	restored, err := restoreSnapshot(base, id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"snapshot": id, "restored": restored, "roots": s.skillRoots()})
 }
 
 // runGit 执行一个 git 子命令（dir 为空 = 在任意位置执行）。输出一并返回便于报错。

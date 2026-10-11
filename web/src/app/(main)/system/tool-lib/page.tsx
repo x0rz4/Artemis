@@ -4,10 +4,11 @@ import * as React from "react";
 
 import {
   CheckCircle2Icon,
-  CloudDownloadIcon,
+  DownloadIcon,
   FolderOpenIcon,
   PlusIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
   Trash2Icon,
   TriangleAlertIcon,
   UploadIcon,
@@ -23,7 +24,20 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import type { LibSourceInfo, LibSyncItem, ToolLib, ToolLibCheck } from "@/lib/types";
+import type { LibSnapshot, LibSourceInfo, LibSyncItem, ToolLib, ToolLibCheck } from "@/lib/types";
+
+/** 快照占用展示（不足 1KB 按 B 显示）。 */
+function fmtBytes(n: number): string {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
 
 /** kind/runtime 的下拉用哨兵值表示"不指定"，提交前换回空串。 */
 const KIND_AUTO = "auto";
@@ -130,6 +144,7 @@ export default function ToolLibPage() {
   const [sources, setSources] = React.useState<LibSourceInfo[]>([]);
   const [src, setSrc] = React.useState<SourceForm>(emptySource);
   const [syncItems, setSyncItems] = React.useState<LibSyncItem[]>([]);
+  const [snaps, setSnaps] = React.useState<LibSnapshot[]>([]);
 
   const load = React.useCallback(
     (quiet = false) => {
@@ -142,6 +157,10 @@ export default function ToolLibPage() {
       api
         .toolLibSources()
         .then(setSources)
+        .catch(() => {});
+      api
+        .toolLibSnapshots()
+        .then(setSnaps)
         .catch(() => {});
     },
     [],
@@ -197,6 +216,21 @@ export default function ToolLibPage() {
         load(true);
       })
       .catch((e) => toast.error("移除失败：" + (e as Error).message))
+      .finally(() => setBusy(false));
+  }
+
+  // 回滚把磁盘文件与清单一起退回某份快照（快照之后新增的条目不动）。
+  function rollback(id?: string) {
+    const label = id ? `快照 ${id}` : "最近一份快照";
+    if (!window.confirm(`回滚到${label}？\n\n磁盘文件与清单会一起退回；快照之后新增的工具不受影响。`)) return;
+    setBusy(true);
+    api
+      .toolLibRollback(id)
+      .then((r) => {
+        toast.success(`已回滚到 ${r.snapshot}（还原 ${r.restored.length} 项，注册 ${r.imported ?? 0} 个工具）`);
+        load(true);
+      })
+      .catch((e) => toast.error("回滚失败：" + (e as Error).message))
       .finally(() => setBusy(false));
   }
 
@@ -430,7 +464,7 @@ export default function ToolLibPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <CloudDownloadIcon className="size-4" />
+            <DownloadIcon className="size-4" />
             来源与同步
           </CardTitle>
           <CardDescription>
@@ -537,9 +571,38 @@ export default function ToolLibPage() {
               预览变更
             </Button>
             <Button size="sm" onClick={() => runSync(false)} disabled={busy || !sources.length}>
-              <CloudDownloadIcon className="size-4" />
+              <DownloadIcon className="size-4" />
               同步全部源
             </Button>
+          </div>
+
+          <div className="space-y-2 rounded-md border p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium">快照与回滚</span>
+              <Button size="sm" variant="ghost" onClick={() => rollback()} disabled={busy || !snaps.length}>
+                <RotateCcwIcon className="size-4" />
+                回滚到最近一份
+              </Button>
+            </div>
+            {snaps.length === 0 ? (
+              <p className="text-muted-foreground text-xs">
+                还没有快照：同步、覆盖上传、清除文件、回滚之前都会自动生成一份（含清单，最多保留 5 份）。
+              </p>
+            ) : (
+              snaps.map((s) => (
+                <div key={s.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono">{s.id}</span>
+                  <Badge variant="outline">{s.reason || "snapshot"}</Badge>
+                  <span className="text-muted-foreground">
+                    {s.items.length} 项 · {fmtBytes(s.bytes)}
+                  </span>
+                  <Button variant="ghost" size="sm" className="ml-auto" onClick={() => rollback(s.id)} disabled={busy}>
+                    <RotateCcwIcon className="size-3.5" />
+                    回滚
+                  </Button>
+                </div>
+              ))
+            )}
           </div>
 
           {syncItems.length > 0 && (
@@ -581,6 +644,7 @@ export default function ToolLibPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>名称</TableHead>
+                  <TableHead>来源</TableHead>
                   <TableHead>类型</TableHead>
                   <TableHead>路径</TableHead>
                   <TableHead>完整性</TableHead>
@@ -595,6 +659,16 @@ export default function ToolLibPage() {
                     <TableCell>
                       <div className="font-medium">{t.name}</div>
                       {t.purpose && <div className="text-muted-foreground text-xs">{t.purpose}</div>}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {t.source ? (
+                        <div className="flex flex-col gap-1">
+                          <Badge variant="outline">{t.source === "uploaded" ? "本地上传" : t.source}</Badge>
+                          {t.version && <span className="text-muted-foreground">v{t.version}</span>}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs">
                       {t.kind || "-"}

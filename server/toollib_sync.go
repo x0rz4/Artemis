@@ -20,8 +20,9 @@ import (
 // version/sha256/path/kind/runtime/entry/purpose，但保留本地的 key/agents/enabled/
 // deferred（平台侧状态不是源能决定的事）。
 //
-// 落地顺序是「文件先、清单后」：先把文件按原子替换装好，再写清单。反过来会出现清单
-// 声称的版本在磁盘上不存在，比"文件新一点"更糟。清单写入前会留 manifest.json.bak。
+// 落地顺序是「先快照 → 再文件 → 最后清单」：快照把将被覆盖的目标与清单一起存起来，
+// 文件用原子替换装好，最后才写清单。反过来会出现清单声称的版本在磁盘上不存在，比
+// "文件新一点"更糟；而少了快照就只能靠 manifest.json.bak 还原"声称的版本"。
 
 const (
 	toolSourceTokenPrefix = "tool"
@@ -44,11 +45,21 @@ type toolSyncItem struct {
 }
 
 type toolSyncResult struct {
-	DryRun  bool           `json:"dry_run"`
-	Sources []string       `json:"sources"`
-	Items   []toolSyncItem `json:"items"`
-	Changed int            `json:"changed"`
-	Failed  int            `json:"failed"`
+	DryRun   bool           `json:"dry_run"`
+	Sources  []string       `json:"sources"`
+	Items    []toolSyncItem `json:"items"`
+	Changed  int            `json:"changed"`
+	Failed   int            `json:"failed"`
+	Snapshot string         `json:"snapshot,omitempty"` // 本次改动前的快照 id（可回滚到它）
+}
+
+// toolSyncPlan 是"待安装"的一条（dry-run 与真实同步共用同一套判定）。
+type toolSyncPlan struct {
+	itemIdx int
+	name    string
+	remote  toolEntry
+	clean   string
+	local   *toolEntry
 }
 
 // sourceTypeCanSyncTools 报告源类型能否参与工具库的「清单 + 资产」同步。
@@ -98,6 +109,12 @@ func (s *Server) tlSaveSource(w http.ResponseWriter, r *http.Request) {
 	if s.pg(w) == nil {
 		return
 	}
+	if !libTryLock(&s.toolLibMu) {
+		writeErr(w, 409, "工具库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.toolLibMu.Unlock()
+
 	var req struct {
 		Source     libSource `json:"source"`
 		Token      string    `json:"token"`
@@ -157,6 +174,12 @@ func (s *Server) tlDeleteSource(w http.ResponseWriter, r *http.Request) {
 	if s.pg(w) == nil {
 		return
 	}
+	if !libTryLock(&s.toolLibMu) {
+		writeErr(w, 409, "工具库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.toolLibMu.Unlock()
+
 	name := r.PathValue("name")
 	m, err := s.loadToolManifest()
 	if err != nil {
@@ -194,6 +217,12 @@ func (s *Server) tlSync(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
+	if !libTryLock(&s.toolLibMu) {
+		writeErr(w, 409, "工具库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.toolLibMu.Unlock()
+
 	var req struct {
 		Names  []string `json:"names"`
 		DryRun bool     `json:"dry_run"`
@@ -222,7 +251,7 @@ func (s *Server) tlSync(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		res.Sources = append(res.Sources, src.Name)
-		items, changed, serr := s.syncToolSource(ctx, src, m, req.DryRun, req.Force)
+		items, changed, snapshot, serr := s.syncToolSource(ctx, src, m, req.DryRun, req.Force)
 		res.Items = append(res.Items, items...)
 		for _, it := range items {
 			switch it.Action {
@@ -233,6 +262,9 @@ func (s *Server) tlSync(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		touched = append(touched, changed...)
+		if snapshot != "" && res.Snapshot == "" {
+			res.Snapshot = snapshot
+		}
 		if serr != nil {
 			putLibSourceState(m.Sources, src.Name, "", serr.Error())
 			res.Failed++
@@ -267,97 +299,114 @@ func (s *Server) tlSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, res)
 }
 
-// syncToolSource 同步单个源：拉清单、逐条比对安装，并把新条目写进（内存里的）本地清单。
-// 返回本次结果、实际发生变化的条目、以及源级别的错误。
-func (s *Server) syncToolSource(ctx context.Context, src libSource, m *toolManifest, dryRun, force bool) ([]toolSyncItem, []toolEntry, error) {
+// syncToolSource 同步单个源：拉清单、逐条比对，真实同步前先做一次快照。
+// 返回本次结果、发生变化并已写入内存清单的条目、快照 id、以及源级别的错误。
+func (s *Server) syncToolSource(ctx context.Context, src libSource, m *toolManifest, dryRun, force bool) ([]toolSyncItem, []toolEntry, string, error) {
 	items := []toolSyncItem{}
 	if err := sourceTypeCanSyncTools(src); err != nil {
-		return items, nil, err
+		return items, nil, "", err
 	}
 	client, hosts, err := s.sourceClient(src)
 	if err != nil {
-		return items, nil, err
+		return items, nil, "", err
 	}
 	manifestURL, err := sourceManifestURL(src)
 	if err != nil {
-		return items, nil, err
+		return items, nil, "", err
 	}
 	token := s.sourceToken(toolSourceTokenPrefix, src.Name)
 	raw, err := fetchSourceBytes(ctx, client, hosts, manifestURL, maxSourceManifestBytes, token)
 	if err != nil {
-		return items, nil, fmt.Errorf("拉取清单失败：%w", err)
+		return items, nil, "", fmt.Errorf("拉取清单失败：%w", err)
 	}
 	var remote toolManifest
 	if err := json.Unmarshal(raw, &remote); err != nil {
-		return items, nil, fmt.Errorf("解析源清单失败：%w", err)
+		return items, nil, "", fmt.Errorf("解析源清单失败：%w", err)
 	}
 	if len(remote.Tools) == 0 {
-		return items, nil, errors.New("源清单里没有 tools 条目")
+		return items, nil, "", errors.New("源清单里没有 tools 条目")
 	}
 
-	changed := []toolEntry{}
+	// 第一遍只做计划：dry-run 与真实同步共用同一套判定，计划里的条目就是快照要覆盖的目标。
+	plans := []toolSyncPlan{}
 	for _, re := range remote.Tools {
 		item := toolSyncItem{Source: src.Name, Name: re.Name, Remote: re.Version, Path: re.Path}
+		idx := len(items)
+		items = append(items, item)
 		if strings.TrimSpace(re.Name) == "" {
-			item.Action = "failed"
-			item.Error = "条目缺少 name"
-			items = append(items, item)
+			items[idx].Action = "failed"
+			items[idx].Error = "条目缺少 name"
 			continue
 		}
 		cleanPath, perr := toolEntryPath(re)
 		if perr != nil {
-			item.Action = "failed"
-			item.Error = perr.Error()
-			items = append(items, item)
+			items[idx].Action = "failed"
+			items[idx].Error = perr.Error()
 			continue
 		}
-
 		_, localEntry := findToolEntry(m, re.Name)
 		if localEntry != nil {
-			item.Local = localEntry.Version
+			items[idx].Local = localEntry.Version
 		}
 		needInstall, reason := toolEntryChanged(localEntry, re)
 		if force {
 			needInstall, reason = true, "强制重装"
 		}
-		switch {
-		case localEntry == nil:
-			item.Action = "add"
+		if !needInstall {
+			items[idx].Action = "keep"
+			items[idx].Reason = "已是源上的版本"
+			continue
+		}
+		if localEntry == nil {
+			items[idx].Action = "add"
 			if reason == "" {
 				reason = "本地缺失"
 			}
-		case needInstall:
-			item.Action = "update"
-		default:
-			item.Action = "keep"
-			item.Reason = "已是源上的版本"
-			items = append(items, item)
-			continue
+		} else {
+			items[idx].Action = "update"
 		}
-		item.Reason = reason
-		if dryRun {
-			items = append(items, item)
-			continue
+		items[idx].Reason = reason
+		name := strings.TrimSpace(re.Name)
+		if name == "" {
+			name = strings.TrimSuffix(filepath.Base(cleanPath), filepath.Ext(cleanPath))
 		}
+		plans = append(plans, toolSyncPlan{itemIdx: idx, name: name, remote: re, clean: cleanPath, local: localEntry})
+	}
+	if dryRun || len(plans) == 0 {
+		return items, nil, "", nil
+	}
 
-		merged, ierr := s.installToolFromSource(ctx, client, hosts, src, token, manifestURL, re, cleanPath, localEntry)
+	// 快照：这次要覆盖的目标（zip 落到 <name>/，其它落到清单给的路径）+ 清单本身。
+	rels := make([]string, 0, len(plans))
+	for _, p := range plans {
+		if strings.EqualFold(filepath.Ext(p.clean), ".zip") {
+			rels = append(rels, p.name)
+			continue
+		}
+		rels = append(rels, p.clean)
+	}
+	snapID, snapErr := takeSnapshot(s.toolsDir(), "sync:"+src.Name, rels)
+	if snapErr != nil {
+		return items, nil, "", snapErr
+	}
+
+	changed := []toolEntry{}
+	for _, p := range plans {
+		merged, ierr := s.installToolFromSource(ctx, client, hosts, src, token, manifestURL, p.remote, p.clean, p.name, p.local)
 		if ierr != nil {
-			item.Action = "failed"
-			item.Error = ierr.Error()
-			items = append(items, item)
+			items[p.itemIdx].Action = "failed"
+			items[p.itemIdx].Error = ierr.Error()
 			continue
 		}
 		if err := appendOrReplaceEntry(m, merged); err != nil {
-			item.Action = "failed"
-			item.Error = err.Error()
-			items = append(items, item)
+			items[p.itemIdx].Action = "failed"
+			items[p.itemIdx].Error = err.Error()
 			continue
 		}
 		changed = append(changed, merged)
-		item.Path = merged.Path
-		items = append(items, item)
+		items[p.itemIdx].Path = merged.Path
 	}
-	return items, changed, nil
+	return items, changed, snapID, nil
 }
 
 // toolEntryChanged 报告源条目相对本地是否需要安装（"" = 不需要）。
@@ -389,7 +438,7 @@ func toolEntryChanged(local *toolEntry, remote toolEntry) (bool, string) {
 // 路径落到 data/tools 下并钉摘要。任何校验失败都不会破坏本地已有文件。
 func (s *Server) installToolFromSource(
 	ctx context.Context, client *http.Client, hosts map[string]bool, src libSource, token, manifestURL string,
-	remote toolEntry, cleanPath string, local *toolEntry,
+	remote toolEntry, cleanPath, name string, local *toolEntry,
 ) (toolEntry, error) {
 	assetURL, err := sourceAssetURL(src, manifestURL, remote.URL, cleanPath)
 	if err != nil {
@@ -398,6 +447,7 @@ func (s *Server) installToolFromSource(
 	// 合并：源定义生效，本地平台状态保留。
 	merged := remote
 	merged.Source = src.Name
+	merged.Name = name
 	if local != nil {
 		merged.Key = local.Key
 		if len(remote.Agents) == 0 {
@@ -410,12 +460,8 @@ func (s *Server) installToolFromSource(
 			merged.Deferred = true
 		}
 	}
-	if merged.Name == "" {
-		merged.Name = strings.TrimSuffix(filepath.Base(cleanPath), filepath.Ext(cleanPath))
-	}
 
 	if strings.EqualFold(filepath.Ext(cleanPath), ".zip") {
-		name := merged.Name
 		if msg := validToolName(name); msg != "" {
 			return toolEntry{}, fmt.Errorf("工具名无效：%s", msg)
 		}
@@ -423,7 +469,6 @@ func (s *Server) installToolFromSource(
 		if ferr != nil {
 			return toolEntry{}, ferr
 		}
-		want := merged
 		if sha := strings.TrimSpace(remote.SHA256); sha != "" {
 			if got := hashSourceBytes(b); !strings.EqualFold(got, sha) {
 				return toolEntry{}, fmt.Errorf("sha256 不符（清单 %s，实际 %s），已放弃安装", sha, got)
@@ -444,7 +489,7 @@ func (s *Server) installToolFromSource(
 		if cerr := tmp.Close(); cerr != nil {
 			return toolEntry{}, cerr
 		}
-		installed, ierr := s.installToolZip(tmpName, name, want, true)
+		installed, ierr := s.installToolZip(tmpName, name, merged, true)
 		if ierr != nil {
 			return toolEntry{}, ierr
 		}

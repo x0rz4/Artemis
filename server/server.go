@@ -51,6 +51,12 @@ type Server struct {
 	// free slots off the same snapshot and over-promote past the limit.
 	concMu sync.Mutex
 
+	// 库写锁：工具库/技能库的同步、上传、导入、删除、回滚都会改磁盘与清单，必须互斥
+	// （两个同步同时写 manifest.json 会互相覆盖，留下的 .bak 也说不清是哪一版）。
+	// 用 TryLock，第二个请求拿到明确的 409 而不是排在一个可能几分钟的下载后面。
+	toolLibMu  sync.Mutex
+	skillLibMu sync.Mutex
+
 	cfgMu     sync.Mutex
 	chatAgent *agent.ChatAgent // conversational runner for the chat page; nil w/o LLM
 	// llmProv is the fully-decorated global provider (recorder + failover chain)
@@ -901,6 +907,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/tool-lib/sources", s.tlSaveSource)
 	mux.HandleFunc("DELETE /api/tool-lib/sources/{name}", s.tlDeleteSource)
 	mux.HandleFunc("POST /api/tool-lib/sync", s.tlSync)
+	mux.HandleFunc("GET /api/tool-lib/snapshots", s.tlSnapshots)
+	mux.HandleFunc("POST /api/tool-lib/rollback", s.tlRollback)
 	// MCP CRUD
 	mux.HandleFunc("GET /api/mcp", s.pgListMCP)
 	mux.HandleFunc("POST /api/mcp", s.pgSaveMCP)
@@ -922,6 +930,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/skills/sources", s.skSaveSource)
 	mux.HandleFunc("DELETE /api/skills/sources/{name}", s.skDeleteSource)
 	mux.HandleFunc("POST /api/skills/sync", s.skSync)
+	mux.HandleFunc("GET /api/skills/snapshots", s.skSnapshots)
+	mux.HandleFunc("POST /api/skills/rollback", s.skRollback)
 	mux.HandleFunc("GET /api/skills/missing", s.fsMissingSkills)   // 未命中(想调但不存在)的 skill 名
 	mux.HandleFunc("GET /api/skills/{name}/usage", s.fsSkillUsage) // 单个 skill 的最近调用
 	mux.HandleFunc("PUT /api/skills/{name}/meta", s.fsUpdateSkillMeta)

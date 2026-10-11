@@ -1351,6 +1351,14 @@ export interface LibSyncResult {
   failed: number;
 }
 
+export interface LibSnapshot {
+  id: string;
+  created_at: string;
+  reason?: string;
+  items: string[];
+  bytes: number;
+}
+
 export interface SkillSourceState {
   roots: string[];
   sources: LibSourceInfo[];

@@ -55,6 +55,13 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品名 **Artemis**（可执�
 - 令牌同样存 settings（`skill_source_token:<源名>`），不进 `data/skills/manifest.json`。
 - 侧边栏「工具库」页管工具，「Skill」页头部的同步控件管技能；两者共用 `synclib.go` 的白名单与校验口径。
 
+## 库快照与写锁（`server/snapshot.go`）
+
+- 同步、覆盖上传、清除文件、清源、回滚**之前**都会自动生成一份快照到 `<库根>/.snapshots/<id>/`，内容 = 将被改动的目标 + `manifest.json`（清单必须一起存，否则文件与清单会对不上）。最多保留 5 份。
+- 快照的语义是"并集"：回滚只把快照里的条目放回去，快照之后新增的条目不删。回滚前会再存一份 `pre-rollback:` 快照，避免"回滚错了"不可逆。
+- 接口：`GET /api/tool-lib/snapshots`、`POST /api/tool-lib/rollback`、`GET /api/skills/snapshots`、`POST /api/skills/rollback`（`id` 缺省用最近一份）。工具回滚后会按清单重新注册工具行。
+- 每个库一把写锁（`Server.toolLibMu` / `skillLibMu`，用 `TryLock`）：同步、上传、导入、删除、回滚互斥，第二个请求拿 409 而不是排队。**新增会改磁盘或清单的接口时记得走 `libTryLock`**，但不要在 `installSkillZipBytes`/`installToolZip`/`takeSnapshot` 内部再加锁（它们总是被已持锁的调用方调用）。
+
 ## 验证与发布
 
 按改动运行类型检查、相关 Go 测试、构建及 vet。数据库测试使用隔离 PostgreSQL，禁止连接开发者业务数据库。正式包验证首次初始化、鉴权和空业务列表。

@@ -57,10 +57,10 @@ import type {
   LLMRecordDetail,
   LLMRecordItem,
   LLMRetryOverride,
+  LibSnapshot,
   LibSource,
   LibSourceInfo,
   LibSyncResult,
-  LibSyncItem,
   LLMRetryPolicy,
   LLMTask,
   MCPServer,
@@ -1120,6 +1120,10 @@ export const api = {
     put<{ ok: boolean; has_token: boolean }>("/tool-lib/sources", body),
   deleteToolLibSource: (name: string) => del<{ deleted: string }>(`/tool-lib/sources/${encodeURIComponent(name)}`),
   toolLibSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) => post<LibSyncResult>("/tool-lib/sync", body),
+  // 快照：同步/覆盖上传/清除/回滚前自动生成，最多保留 5 份。
+  toolLibSnapshots: () => get<{ snapshots: LibSnapshot[]; dir: string }>("/tool-lib/snapshots").then((r) => arr(r.snapshots)),
+  toolLibRollback: (id?: string) =>
+    post<{ snapshot: string; restored: string[]; imported?: number }>("/tool-lib/rollback", id ? { id } : {}),
 
   // ---- 技能库来源（git 整仓 / github·http 的 zip 清单）----
   skillSources: () => get<SkillSourceState>("/skills/sources"),
@@ -1128,6 +1132,9 @@ export const api = {
   deleteSkillSource: (name: string, purge = false) =>
     del<{ deleted: string }>(`/skills/sources/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`),
   skillSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) => post<LibSyncResult>("/skills/sync", body),
+  skillSnapshots: () => get<{ snapshots: LibSnapshot[]; dir: string }>("/skills/snapshots").then((r) => arr(r.snapshots)),
+  skillRollback: (id?: string) =>
+    post<{ snapshot: string; restored: string[]; roots?: string[] }>("/skills/rollback", id ? { id } : {}),
 
   // ---- mcp ----
   mcpServers: () => get<{ servers: MCPServer[] }>("/mcp").then((r) => arr(r.servers)),

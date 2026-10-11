@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { CloudDownloadIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { DownloadIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/api";
-import type { LibSourceInfo, LibSyncItem } from "@/lib/types";
+import type { LibSnapshot, LibSourceInfo, LibSyncItem } from "@/lib/types";
 
 /**
  * 技能来源与同步：git 型把整仓拉到 data/skills/git/<源名>（目录是远程镜像，本地改动会被
@@ -35,6 +35,7 @@ export function SkillSyncControls() {
   const [roots, setRoots] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [items, setItems] = React.useState<LibSyncItem[]>([]);
+  const [snaps, setSnaps] = React.useState<LibSnapshot[]>([]);
   const [form, setForm] = React.useState({
     name: "",
     type: "git",
@@ -53,6 +54,10 @@ export function SkillSyncControls() {
         setSources(r.sources);
         setRoots(r.roots);
       })
+      .catch(() => {});
+    api
+      .skillSnapshots()
+      .then(setSnaps)
       .catch(() => {});
   }, []);
 
@@ -106,6 +111,20 @@ export function SkillSyncControls() {
       .finally(() => setBusy(false));
   }
 
+  function rollback(id?: string) {
+    const label = id ? `快照 ${id}` : "最近一份快照";
+    if (!window.confirm(`回滚技能库到${label}？\n\n覆盖安装与 git 更新过的 skill 会退回；之后新增的 skill 不受影响。`)) return;
+    setBusy(true);
+    api
+      .skillRollback(id)
+      .then((r) => {
+        toast.success(`已回滚到 ${r.snapshot}（还原 ${r.restored.length} 项）`);
+        load();
+      })
+      .catch((e) => toast.error("回滚失败：" + (e as Error).message))
+      .finally(() => setBusy(false));
+  }
+
   function sync(dryRun: boolean) {
     setBusy(true);
     api
@@ -130,7 +149,7 @@ export function SkillSyncControls() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button size="sm" variant="outline">
-            <CloudDownloadIcon className="size-3.5" />
+            <DownloadIcon className="size-3.5" />
             来源
           </Button>
         </DialogTrigger>
@@ -236,6 +255,32 @@ export function SkillSyncControls() {
                 <RefreshCwIcon className="size-4" />
                 同步全部源
               </Button>
+            </div>
+
+            <div className="space-y-2 rounded-md border p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium">快照与回滚</span>
+                <Button size="sm" variant="ghost" onClick={() => rollback()} disabled={busy || !snaps.length}>
+                  <RefreshCwIcon className="size-3.5" />
+                  回滚到最近一份
+                </Button>
+              </div>
+              {snaps.length === 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  还没有快照：覆盖安装、git 更新、清源之前都会自动生成一份（含清单，最多保留 5 份）。
+                </p>
+              ) : (
+                snaps.map((s) => (
+                  <div key={s.id} className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-mono">{s.id}</span>
+                    <Badge variant="outline">{s.reason || "snapshot"}</Badge>
+                    <span className="text-muted-foreground">{s.items.length} 项</span>
+                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => rollback(s.id)} disabled={busy}>
+                      回滚
+                    </Button>
+                  </div>
+                ))
+              )}
             </div>
 
             {items.length > 0 && (

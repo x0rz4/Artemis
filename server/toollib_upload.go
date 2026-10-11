@@ -424,6 +424,12 @@ func (s *Server) tlUpload(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
+	if !libTryLock(&s.toolLibMu) {
+		writeErr(w, 409, "工具库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.toolLibMu.Unlock()
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxToolUploadBytes+1<<20)
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
@@ -476,6 +482,14 @@ func (s *Server) tlUpload(w http.ResponseWriter, r *http.Request) {
 		Agents: splitAgents(r.FormValue("agents")),
 	}
 	overwrite := r.URL.Query().Get("overwrite") == "true"
+
+	// 覆盖前留一份快照：上传是唯一由人手误触就能顶掉现有工具的入口，回滚得有个依据。
+	if overwrite {
+		if _, serr := takeSnapshot(s.toolsDir(), "upload:"+name, []string{name}); serr != nil {
+			writeErr(w, 500, "快照失败，已放弃覆盖："+serr.Error())
+			return
+		}
+	}
 
 	var entry toolEntry
 	if isZipFile(tmpName) {

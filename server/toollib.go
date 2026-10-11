@@ -110,7 +110,7 @@ func (s *Server) loadToolManifest() (*toolManifest, error) {
 		m.Tools = []toolEntry{}
 	}
 	if m.Sources == nil {
-		m.Sources = []toolSource{}
+		m.Sources = []libSource{}
 	}
 	return &m, nil
 }
@@ -501,6 +501,12 @@ func (s *Server) tlDelete(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
+	if !libTryLock(&s.toolLibMu) {
+		writeErr(w, 409, "工具库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.toolLibMu.Unlock()
+
 	name := r.PathValue("name")
 	m, err := s.loadToolManifest()
 	if err != nil {
@@ -516,6 +522,11 @@ func (s *Server) tlDelete(w http.ResponseWriter, r *http.Request) {
 	key, _ := entryKey(*entry)
 	if purge {
 		if clean, msg := toolEntryPath(*entry); msg == nil {
+			// 连文件一起删之前先留快照：误删整个目录在武器库里是最贵的事故。
+			if _, serr := takeSnapshot(s.toolsDir(), "delete:"+name, []string{clean}); serr != nil {
+				writeErr(w, 500, "快照失败，已放弃删除："+serr.Error())
+				return
+			}
 			// 只删条目自己的路径，且必须落在 data/tools 内（清单是本地文件，
 			// 但仍按不可信输入处理——手工改过的清单不该能删到别的目录）。
 			target := filepath.Join(s.toolsDir(), filepath.FromSlash(clean))
@@ -543,4 +554,70 @@ func (s *Server) tlDelete(w http.ResponseWriter, r *http.Request) {
 		s.invalidateCommandTemplates()
 	}
 	writeJSON(w, 200, map[string]any{"deleted": name, "key": key, "purged": purge})
+}
+
+// tlSnapshots 列出工具库快照（同步/覆盖上传/清除前的自动快照，最多保留 5 份）。
+func (s *Server) tlSnapshots(w http.ResponseWriter, r *http.Request) {
+	if s.pg(w) == nil {
+		return
+	}
+	base := s.toolsDir()
+	writeJSON(w, 200, map[string]any{"snapshots": listSnapshots(base), "dir": filepath.ToSlash(snapshotRoot(base))})
+}
+
+// tlRollback 把工具库退回某份快照（缺省最近一份），随后按清单重新注册工具行。
+func (s *Server) tlRollback(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	if !libTryLock(&s.toolLibMu) {
+		writeErr(w, 409, "工具库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.toolLibMu.Unlock()
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	base := s.toolsDir()
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		id = latestSnapshotID(base)
+	}
+	if id == "" {
+		writeErr(w, 404, "没有可用的快照")
+		return
+	}
+	// 回滚本身也是覆盖：先把当前状态存一份，免得"回滚错了"变成不可逆。
+	if _, serr := takeSnapshot(base, "pre-rollback:"+id, snapshotItems(base, id)); serr != nil {
+		writeErr(w, 500, "回滚前快照失败，已放弃："+serr.Error())
+		return
+	}
+	restored, err := restoreSnapshot(base, id)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	// 清单跟着快照一起回来了，重新导入一次让 tools 行与磁盘一致。
+	m, lerr := s.loadToolManifest()
+	if lerr != nil {
+		writeErr(w, 500, lerr.Error())
+		return
+	}
+	agents := s.allAgentKeys()
+	imported := 0
+	for _, e := range m.Tools {
+		row, rerr := s.toolEntryToRow(e, agents)
+		if rerr != nil {
+			continue
+		}
+		if _, uerr := pg.UpsertLibraryTool(row, e.overwriteBinding()); uerr == nil {
+			imported++
+		}
+	}
+	s.invalidateCommandTemplates()
+	writeJSON(w, 200, map[string]any{"snapshot": id, "restored": restored, "imported": imported})
 }

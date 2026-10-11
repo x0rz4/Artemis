@@ -1293,6 +1293,13 @@ func skillNameFromFrontmatter(md []byte) string {
 // an existing skill of the same name. 解压与落盘逻辑在 installSkillZipBytes，技能库同步
 // 复用同一条路径。
 func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
+	// 上传会覆盖技能目录并写清单，与同步互斥（同步可能正在拉整仓）。
+	if !libTryLock(&s.skillLibMu) {
+		writeErr(w, 409, "技能库已有写操作在进行中，请稍后重试")
+		return
+	}
+	defer s.skillLibMu.Unlock()
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxSkillZipBytes)
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
@@ -1441,6 +1448,20 @@ func (s *Server) installSkillZipBytes(buf []byte, fallbackName string, overwrite
 		return name, entries, 400, errors.New("解压后缺少 SKILL.md")
 	}
 
+	// 覆盖前留一份快照（含清单）：技能被一次同步换掉后还能退回上一版。
+	//
+	// 只有配置了 data 目录、且这个 skill 本来就落在技能库里才快照：单元测试里的裸
+	// Server 只有一个临时 skillDir，而覆盖内置 skills/ 下的技能不属于"库"的资产
+	// （内置内容随发布包走，重装即可复原），不该往程序目录里写 .snapshots。
+	if overwrite {
+		if base := s.skillsLibDir(); base != "" {
+			if rel, rerr := filepath.Rel(base, skillPath); rerr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+				if _, serr := takeSnapshot(base, "install:"+name, []string{filepath.ToSlash(rel)}); serr != nil {
+					return name, entries, 500, fmt.Errorf("快照失败，已放弃覆盖：%w", serr)
+				}
+			}
+		}
+	}
 	if err := swapDir(tmp, skillPath, overwrite); err != nil {
 		return name, entries, 500, fmt.Errorf("安装失败：%w", err)
 	}
