@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/logging"
 	"github.com/Autumn-27/norma/hook"
 )
 
@@ -209,6 +210,10 @@ func (g *Guard) Attributions() map[string]int {
 
 func (g *Guard) block(tool, reason, cmd string) hook.Result {
 	g.record(tool, "block", reason, cmd)
+	// 决策日志只记拦截：放行是常态，逐条刷日志会把真正的判定淹掉（放行仍进
+	// AuditEntry，见 preToolUse）。刻意不带 cmd——命令里可能夹着凭据或敏感参数，
+	// 而这条日志会落库并在日志页长期展示。
+	logging.Decision("block", tool).Warn("拦截工具调用", "reason", reason)
 	return hook.Result{Decision: "block", Message: reason}
 }
 

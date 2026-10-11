@@ -16,6 +16,7 @@
 
 - 一键更新发布源确定为 `x0rz4/Artemis`：`selfupdate/github.go` 的 `Repo` 不再是占位值 `TO_BE_SET`。仓库发布正式 Release 之前，检查更新会提示"尚未发布任何正式版本"。
 - 核实外部 Agent SDK `norma v0.4.3` 的供应链现状：空模块缓存可重新拉取，项目使用的 11 个子包均可编译，因此不引入 vendor 或 `replace`；依赖获取与恢复约定写入 `spec/PROJECT.md`。
+- 新增结构化日志入口 `logging`：级别与标签由调用方显式给出，不再靠消息关键词猜；task/intent/tool/decision 四类事件的首批站点已迁移，输出仍是日志页与 `server_logs` 消费的单行文本。顺带修复 nil 拦截器调用 `SetReviewer` 会 panic 的既有缺陷。
 
 ## [0.3.15] - 2026-10-07
 

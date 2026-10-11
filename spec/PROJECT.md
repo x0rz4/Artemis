@@ -29,8 +29,19 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 | 工具库 | `server/toollib.go`（清单与导入）、`server/toollib_upload.go`（上传/安装器）、`server/toollib_check.go`（自检）、`server/toollib_command.go`（审计用命令渲染）、`server/toollib_sync.go`（多源同步）、`web/src/app/(main)/system/tool-lib/page.tsx` |
 | 库源同步底座 | `server/synclib.go`（按源派生白名单、令牌、下载校验原子落盘）——工具库与技能库共用，新增源类型只改这里 |
 | 技能库 | `server/skillsrc.go`（多扫描根 + 源同步）、`server/server_mgmt.go` 的 `fs*Skill*`、`web/src/app/(main)/system/skills/_components/skill-sources.tsx` |
+| 观测与日志 | `logging/logging.go`（结构化入口与字段约定）、`server/logsink.go`（文本契约、入库与 SSE）、`web/src/app/(main)/system/logs/page.tsx` |
 
 提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`，按准 vendored 依赖维护：升级必须显式改 `go.mod` 并跑通构建与 CI，不假设上游同步；不把它的源码复制进树（模块不带许可证文件）；上游或代理不可用时用自有 fork 加 `replace` 指向同一版本恢复，不就地改依赖源码。核验仍可取用：把 `GOMODCACHE` 指向空目录后执行 `go mod download github.com/Autumn-27/norma`。
+
+## 观测与日志
+
+后端日志是「一行一条文本」的契约：`server/logsink.go` 把标准库 `log` 的每一行与 `logging` 包的结构化记录一起汇入 stderr、内存环、`server_logs` 表并推 SSE；「系统 → 日志」页面按 `level`/`tag`/`text` 三列消费，**不要**改成 JSON，也不要改动这三列的含义。
+
+- 新代码用 `logging` 包：`logging.Task/Intent/Tool/Decision` 派生 logger，级别与标签由调用方显式给出；输出仍是 `[tag] 消息 key=value …`，含空白的值加引号。
+- 字段约定：`tag` 是事件来源（task/deadline/worker/planner/activity/tool/decision/mcp 等），`task`、`intent`、`tool`、`decision` 是关联标识，错误用 `err`；`decision` 取 allow/deny/ask/timeout/model_fallback/block。
+- 决策日志只记非放行结果（拦截、拒绝、审批请求、超时、模型兜底）与决策记录落库失败；放行是常态，不逐条刷日志。
+- 不把工具命令行与输入原文写进日志（可能含凭据与业务内容）；多行内容先截断成单行字段再入库。
+- 级别开关尚未提供，`logging` 只放过 info 及以上；历史调用点仍走标准库 `log`（级别由 `levelOf` 猜），属过渡状态，迁移时不要顺手改无关文案。
 
 ## 工具库（data/tools）
 

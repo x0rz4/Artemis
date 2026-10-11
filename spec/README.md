@@ -28,6 +28,7 @@
 
 - [开发规范协作](specs/development/spec.md)：统一入口、规则归属与变更完成条件。
 - [自更新](specs/self-update/spec.md)：固定发布源、检查更新、下载校验与换装回滚。
+- [观测](specs/observability/spec.md)：日志文本契约与 task/intent/tool/decision 事件字段。
 
 其余业务能力尚未逐项建立 SPEC。现有约束先以 PROJECT.md 为准；首次改动某能力时，阅读代码与测试补充涉及的现行行为，并区分已验证事实与待确认问题，不虚构完整覆盖。
 

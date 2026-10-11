@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/logging"
 )
 
 // ctxKey is the unexported context key type to avoid collisions.
@@ -140,6 +141,10 @@ type CommandRenderer func(toolName string, input []byte) string
 
 // SetReviewer installs the LLM fallback judge callback. Passing nil disables it.
 func (i *Interceptor) SetReviewer(r Reviewer) {
+	// 与 SetCommandRenderer 一致：Manager 可能在拦截器还没建好时调用，nil 接收者必须安全。
+	if i == nil {
+		return
+	}
 	i.mu.Lock()
 	i.reviewer = r
 	i.mu.Unlock()
@@ -496,6 +501,12 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 	default:
 		out = Decision{ProfileID: out.ProfileID, ModelFallback: true, Action: cfg.FailAction, Message: "模型输出无法解析,按失败策略处理"}
 	}
+	if out.ModelFallback {
+		// 兜底审批是安全语义的降级：必须留痕，否则事后无法解释这次为什么被放行/拒绝。
+		fallbackTask, fallbackAgent := taskInfoFromCtx(ctx)
+		logging.Decision("model_fallback", tool).Warn("模型审批未给出可用判定，按失败策略处理",
+			"task", fallbackTask, "agent", fallbackAgent, "action", out.Action, "reason", out.Message)
+	}
 	// A model verdict never carries a rule; keep RuleID 0 (→ NULL) for history.
 	out.RuleID = 0
 	if len(modelInput) > 0 {
@@ -603,6 +614,15 @@ func (i *Interceptor) Log(ctx context.Context, convID int64, dec Decision, toolN
 	if err == nil {
 		i.bindResult(ctx, id, audit)
 	}
+	// 决策事件留痕：只记拒绝与落库失败，放行不逐条刷日志。
+	args := []any{"task", taskID, "agent", agentName, "reason", dec.Message}
+	if err != nil {
+		logging.Tool("decision", toolName).Error("决策记录落库失败", append(args, "err", err)...)
+		return
+	}
+	if status == "denied" {
+		logging.Decision("deny", toolName).Warn("判定拒绝执行", args...)
+	}
 }
 
 // HandleAsk creates a pending approval record and blocks until the user decides
@@ -633,6 +653,9 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 	if saved, err := i.db.GetInterceptDetail(pendingID); err == nil && saved != nil && saved.Status != "pending" {
 		return saved.Status == "allowed" || (saved.Audit != nil && saved.Audit.EffectiveAction == "allow")
 	}
+
+	// 审批请求属于决策事件：卡在人工这一步必须留痕，否则事后只看到 worker 停住。
+	logging.Decision("ask", toolName).Warn("请求人工审批", "task", taskID, "agent", agentName, "pending", pendingID, "reason", dec.Message)
 
 	detail, _ := json.Marshal(map[string]any{
 		"pending_id": pendingID,
@@ -681,6 +704,8 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		if allowed {
 			action = "allow"
 		}
+		logging.Decision("timeout", toolName).Warn("审批超时，按超时策略处理",
+			"task", taskID, "agent", agentName, "pending", pendingID, "seconds", secs, "resolved", action)
 		resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理")
 		if err != nil {
 			return false

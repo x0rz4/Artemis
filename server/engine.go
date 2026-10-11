@@ -14,6 +14,7 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/logging"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -644,10 +645,10 @@ func (h steerHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []s
 	}
 	n := h.nudges.Add(1)
 	if n > int64(h.limit) {
-		log.Printf("[work %s] 空转回合(仅思考、无正文无工具)已达续跑上限 %d，放行收场", h.label, h.limit)
+		logging.Log().With("tag", "work", "worker", h.label).Info("空转回合(仅思考、无正文无工具)已达续跑上限，放行收场", "limit", h.limit)
 		return prevent, blocking, msg
 	}
-	log.Printf("[work %s] 空转回合(仅思考、无正文无工具)，注入续跑指令 (%d/%d)", h.label, n, h.limit)
+	logging.Log().With("tag", "work", "worker", h.label).Info("空转回合(仅思考、无正文无工具)，注入续跑指令", "nudge", n, "limit", h.limit)
 	return false, []string{emptyTurnNudge}, ""
 }
 
@@ -691,8 +692,12 @@ func (e *Engine) emitActivity(t *Task, r db.Activity) db.Activity {
 					storeID, t.ExpID, exists, refs, maxID)
 			}
 		}
-		log.Printf("[activity] task %s 丢弃活动记录(该任务累计第 %d 条) worker=%s kind=%s tool=%s tuid=%s reason=%s summary=%q: %v%s",
-			t.ID, n, r.Worker, r.Kind, r.Tool, r.ToolUseID, dropReason(err), preview(r.Summary, 80), err, diag)
+		args := []any{"task", t.ID, "tuid", r.ToolUseID, "worker", r.Worker, "kind", r.Kind, "reason", dropReason(err),
+			"dropped", n, "summary", preview(r.Summary, 80), "err", err}
+		if diag != "" {
+			args = append(args, "diag", strings.TrimPrefix(strings.TrimSpace(diag), "|"))
+		}
+		logging.Tool("activity", r.Tool).Error("丢弃活动记录", args...)
 		e.touch(t.ID)
 		return r
 	}
@@ -716,13 +721,13 @@ func (e *Engine) appendActivity(t *Task, r db.Activity) (int64, error) {
 	for attempt := 1; attempt <= 3; attempt++ {
 		if id, err = t.Store.AppendActivity(r); err == nil {
 			if attempt > 1 {
-				log.Printf("[activity] task %s 写入第 %d 次重试成功 (worker=%s kind=%s tool=%s)",
-					t.ID, attempt, r.Worker, r.Kind, r.Tool)
+				logging.Tool("activity", r.Tool).Info("活动写入重试成功",
+					"task", t.ID, "attempt", attempt, "worker", r.Worker, "kind", r.Kind)
 			}
 			return id, nil
 		}
-		log.Printf("[activity] task %s 写入失败 (第 %d/3 次, worker=%s kind=%s tool=%s expID=%d): %v",
-			t.ID, attempt, r.Worker, r.Kind, r.Tool, t.Store.ID(), err)
+		logging.Tool("activity", r.Tool).Warn("活动写入失败",
+			"task", t.ID, "attempt", attempt, "of", 3, "worker", r.Worker, "kind", r.Kind, "expID", t.Store.ID(), "err", err)
 		time.Sleep(time.Duration(attempt) * 25 * time.Millisecond)
 	}
 	return 0, err
@@ -1005,7 +1010,7 @@ func (e *Engine) runWorkerStep(ctx context.Context, t *Task, name string, worker
 	if intent == nil {
 		return false
 	}
-	log.Printf("[worker %s] task %s 领取意图 #%d", name, t.ID, intent.ID)
+	logging.Intent("worker", t.ID, intent.ID).Info("领取意图", "worker", name)
 	return e.runIntent(ctx, t, name, worker, intent, "", "")
 }
 
@@ -1147,7 +1152,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// conversation from its transcript instead of restarting from scratch.
 	if ectx.Err() != nil && taskExecutionPaused(context.Cause(ectx)) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "open"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d 任务暂停回退失败: %v", name, t.ID, intent.ID, err)
+			logging.Intent("worker", t.ID, intent.ID).Error("任务暂停回退失败", "worker", name, "err", err)
 		}
 		return true
 	}
@@ -1155,9 +1160,9 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// 不要误标 blocked。此时 worker 通常已在 settlement 阶段把结果写回。
 	if ectx.Err() != nil && e.isSettling(t.ID) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "exhausted"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d 超时收尾状态落库失败: %v", name, t.ID, intent.ID, err)
+			logging.Intent("worker", t.ID, intent.ID).Error("超时收尾状态落库失败", "worker", name, "err", err)
 		}
-		log.Printf("[worker %s] task %s 意图 #%d 因任务超时收尾结束(exhausted)，写回 %s", name, t.ID, intent.ID, wrote)
+		logging.Intent("worker", t.ID, intent.ID).Info("因任务超时收尾结束", "state", "exhausted", "wrote", wrote)
 		e.touch(t.ID)
 		return true
 	}
@@ -1165,24 +1170,24 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// 标 stopped(不是 blocked),别污染已完成任务的意图状态。
 	if ectx.Err() != nil && isTerminalStatus(e.m.TaskStatus(t.ID)) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d 终态停止落库失败: %v", name, t.ID, intent.ID, err)
+			logging.Intent("worker", t.ID, intent.ID).Error("终态停止落库失败", "worker", name, "err", err)
 		}
-		log.Printf("[worker %s] task %s 意图 #%d 因任务已完成而取消(stopped)", name, t.ID, intent.ID)
+		logging.Intent("worker", t.ID, intent.ID).Info("因任务已完成而取消", "state", "stopped")
 		e.touch(t.ID)
 		return true
 	}
 	// killed by the planner: mark stopped (don't write back results, don't auto-reclaim).
 	if killed {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d planner 停止落库失败: %v", name, t.ID, intent.ID, err)
+			logging.Intent("worker", t.ID, intent.ID).Error("planner 停止落库失败", "worker", name, "err", err)
 		}
-		log.Printf("[worker %s] task %s 意图 #%d 被终止(stopped)", name, t.ID, intent.ID)
+		logging.Intent("worker", t.ID, intent.ID).Info("被终止", "state", "stopped", "worker", name)
 		e.touch(t.ID)
 		t.Notify()
 		return true
 	}
 	if err != nil {
-		log.Printf("[worker %s] intent %d: %v", name, intent.ID, err)
+		logging.Intent("worker", t.ID, intent.ID).Error("意图执行失败", "worker", name, "err", err)
 	}
 	// terminal分流：撞步数上限 ≠ 完成。max_turns→exhausted（规划者据此知道这个方向
 	// 试过但没真正做完、需换角度，而非当成已覆盖永久跳过）；出错→blocked；正常→done。
@@ -1196,23 +1201,23 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		state = "blocked"
 	case reason == harness.ReasonMaxTurns:
 		state = "exhausted"
-		log.Printf("[worker %s] intent %d 撞步数上限(exhausted)，本次写回 %s", name, intent.ID, wrote)
+		logging.Intent("worker", t.ID, intent.ID).Warn("撞步数上限", "state", "exhausted", "wrote", wrote)
 	case reason == harness.ReasonTimeout:
 		state = "exhausted"
-		log.Printf("[worker %s] intent %d 运行超时(exhausted)，收尾后写回 %s", name, intent.ID, wrote)
+		logging.Intent("worker", t.ID, intent.ID).Warn("运行超时", "state", "exhausted", "wrote", wrote)
 	case wrote.Total() == 0:
 		// 续跑场景豁免：此前轮次已写过事实（暂停/重跑后本次无增量）不算零写回。
 		if prior, _ := t.Store.FactsYielded(intent.ID); len(prior) == 0 {
 			state = "exhausted"
 			zeroWriteback = true
-			log.Printf("[worker %s] intent %d 正常结束但零写回(exhausted)，不当已覆盖处理", name, intent.ID)
+			logging.Intent("worker", t.ID, intent.ID).Warn("正常结束但零写回，不当已覆盖处理", "state", "exhausted")
 		}
 	}
 	if state == "blocked" && isTaskLLMChainExhausted(err) {
 		_ = t.Store.SetIntentBlockedReason(intent.ID, db.IntentBlockedLLMQuota)
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
-			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
+			logging.Intent("worker", t.ID, intent.ID).Error("终态落库失败", "state", state, "worker", name, "err", stateErr)
 		}
 	}
 	if zeroWriteback {
@@ -1220,7 +1225,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		e.emitActivity(t, db.Activity{NodeID: &uid, Worker: "system", Kind: "text",
 			Summary: fmt.Sprintf("意图 #%d 正常结束但零写回（未落库任何事实/资产/漏洞），已标记 exhausted 交规划者复核，不当「已覆盖」处理", intent.ID)})
 	}
-	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)
+	logging.Intent("worker", t.ID, intent.ID).Info("意图结束", "worker", name, "state", state, "wrote", wrote)
 	e.touch(t.ID)
 	t.NotifyDone(intent.ID) // results changed the graph -> wake the planner (with the just-finished intent id)
 	return true

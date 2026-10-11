@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"runtime/debug"
 
+	"github.com/Autumn-27/artex/logging"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -79,7 +79,13 @@ type guardedTool struct{ actool.CoreTool }
 func (g *guardedTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (res actool.Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[tools] %s panic: %v\n%s", g.Name(), r, debug.Stack())
+			// 堆栈含换行，先截断再交给日志汇：否则一条记录就会把日志页整屏占掉，
+			// 而日志汇按「一行一条」入库。
+			stack := string(debug.Stack())
+			if len(stack) > 2000 {
+				stack = stack[:2000] + "…"
+			}
+			logging.Tool("tools", g.Name()).Error("工具内部 panic", "err", r, "stack", stack)
 			res, err = actool.Errorf(fmt.Sprintf("工具 %s 内部错误：%v（本次调用已失败，可换个参数或改用别的工具）", g.Name(), r)), nil
 		}
 	}()

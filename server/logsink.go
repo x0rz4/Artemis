@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/logging"
 )
 
 // LogLine is one captured backend log entry exposed by the /api/logs endpoints.
@@ -46,8 +48,25 @@ type logSinkT struct {
 var logSink = &logSinkT{cap: 3000, subs: map[chan LogLine]struct{}{}, out: os.Stderr}
 
 // StartLogCapture redirects the standard log package through the in-memory sink
-// (still writing to stderr). Call once at startup, as early as possible.
-func StartLogCapture() { log.SetOutput(logSink) }
+// (still writing to stderr) and installs the sink as the structured logging
+// target. Call once at startup, as early as possible.
+func StartLogCapture() {
+	log.SetOutput(logSink)
+	logging.Setup(logSink)
+}
+
+// Emit writes one line whose level and tag are supplied by the caller
+// (logging 包的结构化入口). Text keeps the "[tag] message …" shape of legacy
+// log.Printf lines so the log page and its stored columns stay unchanged; the
+// difference is that levelOf no longer has to guess the level from Chinese
+// keywords.
+func (s *logSinkT) Emit(level, tag, text string) {
+	if level == "" {
+		level = "info"
+	}
+	_, _ = fmt.Fprintf(s.out, "%s %s\n", time.Now().Format("2006/01/02 15:04:05"), text)
+	s.add(LogLine{TS: time.Now().Format(time.RFC3339), Level: level, Tag: tag, Text: text})
+}
 
 // SetDB wires a postgres DB into the sink once (idempotent). It:
 //  1. Restores the last 100 log rows from DB into the ring so the /logs page
