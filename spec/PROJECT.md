@@ -41,7 +41,8 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 - 字段约定：`tag` 是事件来源（task/deadline/worker/planner/activity/tool/decision/mcp 等），`task`、`intent`、`tool`、`decision` 是关联标识，错误用 `err`；`decision` 取 allow/deny/ask/timeout/model_fallback/block。
 - 决策日志只记非放行结果（拦截、拒绝、审批请求、超时、模型兜底）与决策记录落库失败；放行是常态，不逐条刷日志。
 - 不把工具命令行与输入原文写进日志（可能含凭据与业务内容）；多行内容先截断成单行字段再入库。
-- 级别开关尚未提供，`logging` 只放过 info 及以上；历史调用点仍走标准库 `log`（级别由 `levelOf` 猜），属过渡状态，迁移时不要顺手改无关文案。
+- 级别开关是环境变量 `ARTEX_LOG_LEVEL`（`debug|info|warn|error`，缺省 `info`）：结构化日志在 `logging` 里过滤，标准库 `log` 的行由 `server/logsink.go` 用同一阈值过滤——两条路径共用一个阈值，否则调级别只会让一半日志安静下来。写错的值回落 `info` 并在 stderr 提示，启动时也会报一句当前阈值。
+- 历史调用点仍走标准库 `log`（级别由 `levelOf` 猜），属过渡状态；迁移时不要顺手改无关文案。
 
 ## 工具库（data/tools）
 

@@ -53,6 +53,10 @@ var logSink = &logSinkT{cap: 3000, subs: map[chan LogLine]struct{}{}, out: os.St
 func StartLogCapture() {
 	log.SetOutput(logSink)
 	logging.Setup(logSink)
+	// 明确报一句当前阈值：低于它的行会被丢弃，不说明白容易被当成"日志丢了"。
+	if lvl := logging.MinLevel(); lvl != "info" {
+		_, _ = fmt.Fprintf(logSink.out, "[logging] ARTEX_LOG_LEVEL=%s，低于该级别的日志不再输出\n", lvl)
+	}
 }
 
 // Emit writes one line whose level and tag are supplied by the caller
@@ -63,6 +67,10 @@ func StartLogCapture() {
 func (s *logSinkT) Emit(level, tag, text string) {
 	if level == "" {
 		level = "info"
+	}
+	// slog 侧已按阈值过滤过一遍；这里再挡一次，让绕过 logger 的调用者也受同一条规则约束。
+	if !logging.Allows(level) {
+		return
 	}
 	_, _ = fmt.Fprintf(s.out, "%s %s\n", time.Now().Format("2006/01/02 15:04:05"), text)
 	s.add(LogLine{TS: time.Now().Format(time.RFC3339), Level: level, Tag: tag, Text: text})
@@ -137,12 +145,21 @@ func (s *logSinkT) SetDB(ctx context.Context, pg *db.DB) {
 }
 
 // Write implements io.Writer for the log package: one call per log.Printf line.
+//
+// 这些行绕过 slog，级别只能由文本推断（parseLog/levelOf），所以级别开关在这里统一
+// 生效：否则调高 ARTEX_LOG_LEVEL 只会让结构化日志安静下来，标准库日志照旧刷屏。
 func (s *logSinkT) Write(p []byte) (int, error) {
-	_, _ = s.out.Write(p) // keep the terminal output
 	line := strings.TrimRight(string(p), "\n")
-	if strings.TrimSpace(line) != "" {
-		s.add(parseLog(line))
+	if strings.TrimSpace(line) == "" {
+		_, _ = s.out.Write(p) // 空行照旧透传，只是不进环/库
+		return len(p), nil
 	}
+	l := parseLog(line)
+	if !logging.Allows(l.Level) {
+		return len(p), nil
+	}
+	_, _ = s.out.Write(p) // keep the terminal output
+	s.add(l)
 	return len(p), nil
 }
 

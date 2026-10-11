@@ -18,6 +18,7 @@
 - 核实外部 Agent SDK `norma v0.4.3` 的供应链现状：空模块缓存可重新拉取，项目使用的 11 个子包均可编译，因此不引入 vendor 或 `replace`；依赖获取与恢复约定写入 `spec/PROJECT.md`。
 - 新增结构化日志入口 `logging`：级别与标签由调用方显式给出，不再靠消息关键词猜；task/intent/tool/decision 四类事件的首批站点已迁移，输出仍是日志页与 `server_logs` 消费的单行文本。顺带修复 nil 拦截器调用 `SetReviewer` 会 panic 的既有缺陷。
 - 高频日志源降噪：流量的七处同形写入诊断合并为一条带 `stage` 的结构化 warn，LLM 熔断/故障转移/链耗尽与 `llmrec`、`enrich` 的失败路径补上 `profile`/`model`/字段；进日志的 URL 去掉查询串与片段，避免凭据随日志长期留存。
+- 新增日志级别开关 `ARTEX_LOG_LEVEL`（`debug|info|warn|error`，缺省 `info`）：结构化日志与标准库 `log` 的行共用一个阈值，日志汇统一过滤，写错的值回落 info 并提示；`planner` 每轮规划与任务 LLM 重试等高频站点同时迁到结构化入口。
 
 ## [0.3.15] - 2026-10-07
 

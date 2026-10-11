@@ -15,6 +15,7 @@ import (
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/llmrec"
+	"github.com/Autumn-27/artex/logging"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/transcript"
 )
@@ -259,8 +260,8 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 			if callErr != nil && ctx.Err() == nil &&
 				attempt < retries && isRetryableStreamError(callErr) {
 				backoff := backoffOf(attempt)
-				log.Printf("[task-llm] task %s 非流式调用失败,%v 后同 provider 重试 (%d/%d): %v",
-					taskID, backoff, attempt+1, retries, callErr)
+				logging.Log().With("tag", "task-llm", "task", taskID).Warn("非流式调用失败，同 provider 重试",
+					"backoff", backoff, "attempt", attempt+1, "retries", retries, "err", callErr)
 				if x, ok := ctx.Value(executionKey{}).(executionContext); ok && x.Engine != nil {
 					x.Engine.setWorkPhase(x.IntentID, "backoff", "", false, false)
 				}
@@ -336,8 +337,8 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 				if streamErr != nil && !committed && ctx.Err() == nil &&
 					attempt < retries && isRetryableStreamError(streamErr) {
 					backoff := backoffOf(attempt)
-					log.Printf("[task-llm] task %s 提交前流失败,%v 后同 provider 重试 (%d/%d): %v",
-						taskID, backoff, attempt+1, retries, streamErr)
+					logging.Log().With("tag", "task-llm", "task", taskID).Warn("提交前流失败，同 provider 重试",
+						"backoff", backoff, "attempt", attempt+1, "retries", retries, "err", streamErr)
 					if x, ok := ctx.Value(executionKey{}).(executionContext); ok && x.Engine != nil {
 						x.Engine.setWorkPhase(x.IntentID, "backoff", "", false, false)
 					}

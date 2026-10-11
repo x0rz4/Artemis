@@ -4,7 +4,7 @@
 
 后端日志同时是运行诊断入口与「系统 → 日志」页面的数据源：一行一条文本，带显式级别与标签，落 stderr、内存环、`server_logs` 表并推送给 SSE 订阅者。本规范描述已落地的日志契约与四类事件（task / intent / tool / decision）的结构化要求。
 
-仍然存在、本规范不覆盖的部分：日志级别开关与降噪配置尚未提供；大量历史调用点仍走标准库 `log`，级别由 `server/logsink.go` 的关键词表推断，属过渡状态。
+仍然存在、本规范不覆盖的部分：运行期（页面或接口）调整级别的入口尚未提供，级别只能在启动时由环境变量决定；大量历史调用点仍走标准库 `log`，级别由 `server/logsink.go` 的关键词表推断，属过渡状态。
 
 ## 需求
 
@@ -61,6 +61,22 @@ task、intent、tool、decision 四类事件的关键站点必须走结构化入
 - GIVEN：轮询链上的配置全部失败。
 - WHEN：流式与非流式路径分别走到耗尽。
 - THEN：各产生一条 error 级日志，带失败配置数量与最后错误；熔断与故障转移各自带 `profile`/`model` 与下一跳字段。
+
+### OBS-004：日志级别开关
+
+最低输出级别必须由 `ARTEX_LOG_LEVEL`（`debug|info|warn|error`，缺省 `info`，大小写不敏感）决定，且对结构化日志与标准库 `log` 的行使用同一阈值，过滤效果在 stderr、内存环、`server_logs` 与 SSE 上一致。无效取值必须回落 `info` 并给出可读提示；启动时必须说明当前生效的阈值。
+
+#### 场景：调高阈值
+
+- GIVEN：`ARTEX_LOG_LEVEL=warn`。
+- WHEN：分别产生一条 info 与一条 warn 日志（结构化调用与标准库 `log` 各来一遍）。
+- THEN：只有 warn 及以上的行出现在 stderr、内存环、`server_logs` 与 SSE。
+
+#### 场景：写错取值
+
+- GIVEN：`ARTEX_LOG_LEVEL=verbose`。
+- WHEN：进程启动。
+- THEN：阈值回落 `info`，stderr 上出现一行提示，日志量不因笔误变化。
 
 ## 关联资料
 

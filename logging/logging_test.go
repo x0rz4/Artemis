@@ -118,3 +118,55 @@ func TestSetupNilKeepsWorking(t *testing.T) {
 		t.Fatalf("Setup(nil) 后日志丢失：level=%q", sink.level)
 	}
 }
+
+// resetLevel 把阈值恢复成缺省 info，避免用例之间互相影响。
+func resetLevel(t *testing.T) {
+	t.Helper()
+	t.Setenv(envLogLevel, "")
+	setMinFromEnv()
+	t.Cleanup(func() {
+		t.Setenv(envLogLevel, "")
+		setMinFromEnv()
+	})
+}
+
+func TestLogLevelFiltersStructuredLogs(t *testing.T) {
+	sink := withCapture(t)
+	resetLevel(t)
+	t.Setenv(envLogLevel, "warn")
+	setMinFromEnv()
+
+	Log().With("tag", "task").Info("被过滤")
+	Log().With("tag", "task").Warn("保留")
+	if sink.text != "[task] 保留" || sink.level != "warn" {
+		t.Fatalf("warn 阈值下应只留 warn：level=%q text=%q", sink.level, sink.text)
+	}
+	if !Allows("warn") || !Allows("error") || Allows("info") {
+		t.Fatalf("Allows 判定错误：warn=%v error=%v info=%v", Allows("warn"), Allows("error"), Allows("info"))
+	}
+}
+
+func TestLogLevelAcceptsDebugAndFallsBackOnUnknown(t *testing.T) {
+	sink := withCapture(t)
+	resetLevel(t)
+
+	t.Setenv(envLogLevel, "DEBUG")
+	setMinFromEnv()
+	if MinLevel() != "debug" {
+		t.Fatalf("级别名应大小写不敏感，得到 %q", MinLevel())
+	}
+	Log().With("tag", "task").Info("debug 阈值下保留")
+	if sink.text == "" {
+		t.Fatal("debug 阈值下 info 不应被过滤")
+	}
+
+	t.Setenv(envLogLevel, "verbose")
+	setMinFromEnv()
+	if MinLevel() != "info" {
+		t.Fatalf("无效级别应回落 info，得到 %q", MinLevel())
+	}
+	// 认不出的级别（例如历史行分类异常）不丢，避免把诊断行静默吃掉。
+	if !Allows("info") || !Allows("没见过") {
+		t.Fatal("回落 info 后 info 与未知级别都应放行")
+	}
+}

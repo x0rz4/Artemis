@@ -904,7 +904,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		if ectx.Err() != nil || e.IsDeleting(t.ID) {
 			return
 		}
-		log.Printf("[planner] task %s 规划中…(%s 触发)", t.ID, src)
+		logging.Task("planner", t.ID).Info("规划中", "trigger", src)
 		// round marker: each Plan() is one planner round; emit a boundary so the
 		// UI can separate rounds in the transcript (kind='round').
 		e.emitActivity(t, db.Activity{Worker: "planner", Kind: "round",
@@ -924,19 +924,19 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		}
 		switch {
 		case err != nil && ectx.Err() == nil:
-			log.Printf("[planner] task %s 规划出错: %v", t.ID, err)
+			logging.Task("planner", t.ID).Error("规划出错", "err", err)
 		case met:
-			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, reason)
+			logging.Task("planner", t.ID).Info("判定目标达成", "reason", reason)
 			// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
 			if err := e.m.SetTaskStatus(t.ID, "done"); err != nil {
-				log.Printf("[planner] task %s 标记完成落库失败: %v", t.ID, err)
+				logging.Task("planner", t.ID).Error("标记完成落库失败", "err", err)
 			}
 			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
 			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
 			// 归为 stopped(而非 blocked)。
 			e.cancelExec(t.ID, agent.AbortGoalMet)
 		default:
-			log.Printf("[planner] task %s 规划完成", t.ID)
+			logging.Task("planner", t.ID).Info("规划完成")
 		}
 		e.touch(t.ID)
 	}
