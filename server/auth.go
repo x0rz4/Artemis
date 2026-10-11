@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	jwtKeyFilename   = "jwt.key"
-	authPassKey      = "auth.password_hash"
-	jwtTTL           = 7 * 24 * time.Hour
-	keyChars         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	defaultUsername  = "artemis"
+	jwtKeyFilename  = "jwt.key"
+	authPassKey     = "auth.password_hash"
+	jwtTTL          = 7 * 24 * time.Hour
+	keyChars        = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	defaultUsername = "artemis"
 
 	// 下限与 setup 页的前端校验一致——校验只放在前端等于没放，直接打 API 就能
 	// 绕过。上限是 bcrypt 的硬限制：超过 72 字节 GenerateFromPassword 会返回
@@ -47,27 +47,47 @@ func validatePassword(pw string) string {
 }
 
 // loadOrCreateJWTKey reads the 32-byte signing key from keyDir/jwt.key. keyDir is
-// the project base dir (next to the executable), NOT the browsable workspace root
-// (dataDir) — the signing key must never be listable/downloadable via the file
+// the project base dir by default, or a dedicated persistent directory, NOT the
+// browsable workspace root (dataDir) — the key must never be downloaded via the file
 // manager. Legacy installs kept it at dataDir/jwt.key; if present there and not yet
 // at the new location, it is migrated (key preserved, so sessions stay valid) and
 // the old file removed so it disappears from the workspace. On first run a random
 // key is generated and persisted.
 func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
+	if err := os.MkdirAll(keyDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create jwt key directory: %w", err)
+	}
 	path := filepath.Join(keyDir, jwtKeyFilename)
+	readKey := func(path string) ([]byte, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		key := strings.TrimSpace(string(data))
+		if len(key) < 32 {
+			return nil, fmt.Errorf("invalid jwt key in %s: expected at least 32 bytes", path)
+		}
+		return []byte(key), nil
+	}
+	if key, err := readKey(path); err == nil {
+		return key, nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read jwt key: %w", err)
+	}
 	// one-time migration out of the old in-workspace location.
 	if legacy := filepath.Join(dataDir, jwtKeyFilename); legacy != path {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			if data, rerr := os.ReadFile(legacy); rerr == nil {
-				if werr := os.WriteFile(path, data, 0o600); werr == nil {
-					_ = os.Remove(legacy)
-					log.Printf("[auth] JWT key 已从 %s 迁移到 %s（移出可浏览工作区）", legacy, path)
-				}
+		if key, err := readKey(legacy); err == nil {
+			if err := os.WriteFile(path, key, 0o600); err != nil {
+				return nil, fmt.Errorf("migrate jwt key: %w", err)
 			}
+			if err := os.Remove(legacy); err != nil {
+				return nil, fmt.Errorf("remove legacy jwt key: %w", err)
+			}
+			log.Printf("[auth] JWT key 已从 %s 迁移到 %s（移出可浏览工作区）", legacy, path)
+			return key, nil
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read legacy jwt key: %w", err)
 		}
-	}
-	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) >= 32 {
-		return []byte(strings.TrimSpace(string(data))), nil
 	}
 	buf := make([]byte, 32)
 	for i := range buf {

@@ -75,19 +75,23 @@ def main():
             assert request("/api/assets", token=token)["total"] == 0
             assert request("/api/exploration/findings?page=1", token=token)["total"] == 0
             assert not request("/api/llm/profiles", token=token)["profiles"]
-            # Recreate the application to prove auth/JWT persistence in mounted data and PG.
+            # The signing key must stay outside the browsable workspace.
+            run("exec", "-T", "artemis", "sh", "-c",
+                'test -s "$ARTEX_JWT_KEY_DIR/jwt.key" && test ! -e /app/data/jwt.key')
+            # Keep the original token: recreating must preserve the auth volume and PG.
             run("up", "-d", "--no-deps", "--force-recreate", "--no-build", "--pull", "never",
                 "--wait", "--wait-timeout", "180", "artemis")
             address = run("port", "artemis", "8787").stdout.strip()
             assert request("/api/auth/status")["initialized"] is True
             assert not request("/api/tasks", token=token)["tasks"]
+            request("/api/auth/init", {"password": admin_password}, expected=403)
             print("PASS: embedded UI, initialization, auth, empty data, special-character DB password, persistence")
         except Exception:
             # Avoid dumping credentials/Compose configuration; service logs contain no supplied keys.
             print(run("logs", "--no-color", "--tail", "100", check=False).stdout, file=sys.stderr)
             raise
         finally:
-            # Only this random test project's containers, anonymous volumes and PG volume are removed.
+            # Remove only this random test project's containers and volumes (including authdata).
             run("down", "--volumes", "--remove-orphans", check=False)
 
 

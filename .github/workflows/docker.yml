@@ -73,9 +73,10 @@ jobs:
       - name: Run focused tests without a database configuration
         run: |
           printf '{}\n' > "$RUNNER_TEMP/empty-config.json"
+          go test ./config -run '^TestJWTKeyDir$' -count=1
           ARTEX_CONFIG="$RUNNER_TEMP/empty-config.json" ARTEX_PG_DSN= \
             "$RUNNER_TEMP/server.test" \
-              -test.run='^(TestSkillRootsAndWriteTarget|TestLoadAllSkillsPrefersEarlierRoot|TestLoadSkillRegistryFiltersByVisibility|TestLoadAllSkillsSkipsMissingRoots|TestValidSkillName|TestSkillRelPath|TestRuntimeProviderTracksOnlyActualCall)$' \
+              -test.run='^(TestSkillRootsAndWriteTarget|TestLoadAllSkillsPrefersEarlierRoot|TestLoadSkillRegistryFiltersByVisibility|TestLoadAllSkillsSkipsMissingRoots|TestValidSkillName|TestSkillRelPath|TestRuntimeProviderTracksOnlyActualCall|TestJWTKeyPersistence|TestJWTKeyMigration|TestJWTKeyFailure)$' \
               -test.v
 
   build:

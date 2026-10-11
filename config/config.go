@@ -71,6 +71,15 @@ func isGoRunDir(dir string) bool {
 	return false
 }
 
+// JWTKeyDir keeps the signing key outside the browsable data workspace.
+// Containers override it with a separately mounted persistent directory.
+func JWTKeyDir() string {
+	if dir := strings.TrimSpace(os.Getenv("ARTEX_JWT_KEY_DIR")); dir != "" {
+		return dir
+	}
+	return BaseDir()
+}
+
 // Path returns the config file path. Resolution order:
 //  1. env ARTEX_CONFIG (explicit override)
 //  2. ./config.json in the current working directory (running from the project

@@ -75,7 +75,9 @@ docker compose up -d --no-build --wait --wait-timeout 180 artemis
 docker compose down
 ```
 
-PostgreSQL 业务数据保存在 `pgdata` 卷，工作区、JWT、录制和上传库保存在 `./data`；`./skills` 保留宿主机技能修改。更新需保留这些数据，**不要使用 `docker compose down -v` 删除数据库卷**。容器更新使用 Compose 拉取/重建。
+PostgreSQL 业务数据保存在 `pgdata` 卷，JWT 签名密钥保存在独立的 `authdata` 卷（`/app/auth/jwt.key`），工作区、录制和上传库保存在 `./data`；`./skills` 保留宿主机技能修改。更新与备份需保留这些数据，**不要使用 `docker compose down -v` 删除持久卷**。容器更新使用 Compose 拉取/重建。
+
+旧容器若把密钥写在 `/app/jwt.key`，首次更新到独立认证卷后需要重新登录，已有管理员密码保持不变；如需保留原会话，应在移除旧容器前备份该文件并迁入 `authdata` 卷的 `jwt.key`（权限 `600`）。后续保留认证卷重建时，未过期的 token 会继续有效。本地运行默认仍使用程序旁的 `jwt.key`，可用 `ARTEX_JWT_KEY_DIR` 指定工作区之外的密钥目录。
 
 本地编译模式需要 Go（版本见 `go.mod`）、Node.js 22、npm、rsync、Python 3.8+，始终构建内嵌静态前端的 `artemis`：
 

@@ -28,6 +28,7 @@ services:
     environment:
       # pgx reads PG* defaults: credentials need no URI escaping.
       ARTEX_PG_DSN: host=postgres port=5432 sslmode=disable
+      ARTEX_JWT_KEY_DIR: /app/auth
       PGUSER: ${POSTGRES_USER:-artemis}
       PGPASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB:-artemis}
@@ -41,8 +42,9 @@ services:
       - "${ARTEX_BIND:-127.0.0.1}:${ARTEX_PORT:-8787}:8787"
       - "127.0.0.1:${ARTEX_PROXY_PORT:-8788}:8788"
     volumes:
-      # 录制、工作区、JWT 等运行文件；PostgreSQL 业务数据在 pgdata 卷。
+      # 录制与工作区；JWT 独立存储，避免被文件管理器浏览或下载。
       - ./data:/app/data
+      - authdata:/app/auth
       # 保留宿主机技能修改；上传/同步技能保存在 data/skills。
       - ./skills:/app/skills
     init: true
@@ -51,3 +53,4 @@ services:
 
 volumes:
   pgdata:
+  authdata:

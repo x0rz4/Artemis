@@ -47,7 +47,21 @@ PR 只构建验证；main 发布 edge，稳定版本标签发布版本标签和 
 - WHEN：准备配置和构建/拉取。
 - THEN：不得启动应用或数据库容器。
 
+### ADDED：DEP-004 容器重建保留登录凭据
+
+JWT 签名密钥必须持久化在可浏览工作区之外；重建应用容器后，未过期的原 token 必须仍可用，管理员初始化状态必须保留。已有本地安装默认密钥位置保持不变。
+
+- GIVEN：已初始化并取得 token 的 Compose 部署。
+- WHEN：保留持久卷并强制重建应用容器。
+- THEN：原 token 访问任务列表返回 200，密钥不出现在 `data` 工作区。
+- GIVEN：密钥目录无法创建、已有密钥无法读取或内容损坏。
+- WHEN：启动服务。
+- THEN：报告错误，不静默替换已有密钥。
+
 ## 设计与影响
+
+- 后续 CI 已完成镜像构建，但重建容器后 `/api/tasks` 返回 401：密钥写入未挂载的 `/app/jwt.key`。新增 `ARTEX_JWT_KEY_DIR`（本地默认程序目录），镜像设为 `/app/auth`，Compose 将独立 `authdata` 卷挂载到该目录。目录按需创建，沿用旧 `data/jwt.key` 迁移；读写或内容错误阻止启动。
+- 兼容与恢复：已有容器根目录中的密钥不会自动出现在新卷中；首次升级可重新登录，管理员密码仍在 PostgreSQL。如需保留已有会话，须在删除旧容器前将 `/app/jwt.key` 备份并放入新认证卷；后续升级保留该卷。原密钥丢失不能恢复原 token。原生部署仍使用程序旁的密钥。
 
 - Dockerfile 采用前端、后端、运行层多阶段构建；.dockerignore 限制构建输入。容器启动仍走现有 start.sh。
 - 新 container 工作流采用原生 amd64/arm64 runner，推送已测试的本地镜像，最终按 digest 合并标签；无需 Docker Hub 凭据。
@@ -68,6 +82,7 @@ PR 只构建验证；main 发布 edge，稳定版本标签发布版本标签和 
 - [x] DEP-003：安装脚本和配置生成器。
 - [x] 修复首轮 CI 暴露的同包函数重名和未使用 import，增加镜像构建前 Go 编译检查。
 - [x] 完成本地脚本、Actions、Compose 检查和 13 项安装回归测试。
+- [x] DEP-004：独立认证持久卷、密钥配置与失败回归测试；保留容器重建后的原 token 验证。
 - [ ] 完成真实双架构构建与隔离容器测试。
 - [x] 更新 README 和来源说明。
 - [ ] 全部验收通过后同步现行能力规范。
@@ -79,16 +94,18 @@ PR 只构建验证；main 发布 edge，稳定版本标签发布版本标签和 
 | --- | --- | --- | --- |
 | 安装回归 | 仓库根目录 `python -m unittest discover -s scripts -p test_install.py -v`，ARTEMIS_TEST_COMPOSE 指向临时安装的官方 Compose CLI | 13 项通过，含真实 Compose 配置解析和特殊字符密码往返 | — |
 | Shell | 仓库根目录 `shellcheck install.sh start.sh`、`bash -n install.sh` | 通过 | — |
-| Actions | 仓库根目录 `actionlint -shellcheck= -pyflakes= .github/workflows/docker.yml .github/workflows/release.yml` | 编译预检加入后通过；最终定向测试步骤待复验 | — |
+| Actions | 仓库根目录 `actionlint -shellcheck= -pyflakes= .github/workflows/docker.yml .github/workflows/release.yml` | 最终编译预检及定向测试步骤均通过语法检查 | — |
 | Go 交叉编译 | 仓库根目录，分别设置 CGO_ENABLED=0、GOOS=linux、GOARCH=amd64/arm64，执行 `go build -trimpath -o <临时产物> ./cmd/artex` | 两种架构均通过；本地 Go 1.27.1，无 embedui，产物仅作编译检查 | 正式 embedui 镜像仍以 CI 为准 |
 | Go 测试编译 | `go test -c -o <临时产物>/server.test.exe ./server` | 通过；另修复测试辅助类型重名 | — |
 | Go 定向测试 | `go test ./server -run '^(TestSkillRootsAndWriteTarget\|TestLoadAllSkillsPrefersEarlierRoot\|TestLoadSkillRegistryFiltersByVisibility\|TestLoadAllSkillsSkipsMissingRoots\|TestValidSkillName\|TestSkillRelPath\|TestRuntimeProviderTracksOnlyActualCall)$' -count=1`，ARTEX_CONFIG 指向临时空配置、ARTEX_PG_DSN 清空 | 测试程序编译成功，但系统拒绝启动：Access is denied | 未执行测试用例；同一定向测试已接入 Linux CI，无业务数据库连接 |
-| Go vet | `go vet ./server` | 检查中 | — |
+| JWT 回归（2026-10-12） | `go test ./config -run '^TestJWTKeyDir$' -count=1`；`go test ./server -run '^TestJWTKey(Persistence\|Migration\|Failure)$' -count=1`；临时空 ARTEX_CONFIG、清空 ARTEX_PG_DSN | 本次均实际执行并通过，覆盖默认/指定目录、密钥复用、原 token、旧路径迁移、损坏/不可读密钥及目录创建失败 | 容器场景仍需 CI |
+| 认证卷配置（2026-10-12） | 官方 Compose CLI 分别解析默认配置和 local override 为 JSON；检查 ARTEX_JWT_KEY_DIR 和 authdata 挂载；Python AST 解析 smoke_container.py | 通过；13 项安装回归和 actionlint 再次通过 | — |
+| Go vet | `go vet ./server ./config ./cmd/artex` | 通过 | — |
 | 文档/差异 | README、变更记录相对链接检查；`git diff --check` | 通过 | — |
-| 容器构建/运行 | [首次 CI](https://github.com/x0rz4/Artemis/actions/runs/38147665246)，两种架构均执行源码构建 | validate 通过；两种架构因相同 Go 编译错误失败；已本地修复 | 本机无 Docker daemon，修复尚未推送，容器及 GHCR 发布待新提交 CI 验证 |
+| 容器构建/运行 | [首次 CI](https://github.com/x0rz4/Artemis/actions/runs/38147665246)；用户后续提供的 sha-da98b1a76521 冒烟日志 | 首次编译错误已修复；后续日志确认镜像可启动，冒烟在重建后原 token 返回 401；已增加独立认证卷修复 | 本机无 Docker daemon，本次密钥持久化修复仍待新提交 CI 验证 |
 
 ## 收尾
 
 - 待完成真实容器验收后建立容器交付能力规范；当前不标记 verified/archived。
-- 远端镜像尚未上传；修复尚未推送，不将未运行的检查记录为通过。需要针对新提交运行 CI，仅重跑旧提交仍会遇到原编译错误。
+- 本次持久化修复尚未推送；不将未运行的容器检查或 GHCR 发布记录为通过。需要针对包含修复的新提交运行 CI，仅重跑旧提交仍会遇到原 token 失效。
 - 本机系统盘空间不足曾阻止缓存写入，后续使用 release-work/ci-check 下的任务专用缓存及临时目录完成编译；未删除开发者缓存或业务数据。

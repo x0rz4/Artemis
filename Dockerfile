@@ -53,8 +53,9 @@ COPY skills/ /app/skills/
 COPY LICENSE THIRD_PARTY_NOTICES.md /app/
 COPY web/LICENSE /app/licenses/web-LICENSE
 COPY web/src/lib/fonts/assets/*LICENSE* /app/licenses/
-# PostgreSQL lives in a separate service; recordings, JWT and workspaces persist here.
-VOLUME ["/app/data"]
+# Keep signing keys persistent and outside the browsable workspace.
+ENV ARTEX_JWT_KEY_DIR=/app/auth
+VOLUME ["/app/data", "/app/auth"]
 EXPOSE 8787 8788
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=12 \
     CMD curl --fail --silent http://127.0.0.1:8787/api/auth/status > /dev/null || exit 1
