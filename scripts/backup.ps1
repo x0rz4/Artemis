@@ -5,7 +5,7 @@ param(
  [Parameter(Mandatory)][string]$Package,
  [string]$PgBin='',
  [string]$DsnEnv='ARTEX_PG_DSN',
- [string]$RestoreDsnEnv='DITING_RESTORE_DSN',
+ [string]$RestoreDsnEnv='ARTEMIS_RESTORE_DSN',
  [string]$DataDir='',
  [string]$SkillsDir='',
  [string]$ConfigFile='',
@@ -16,14 +16,15 @@ param(
  [long]$MaxRestoreBytes=53687091200
 )
 $ErrorActionPreference='Stop'
+# 包格式标识沿用首版值：改名不改动线上格式，已产出的 .dbak 仍可恢复。
 $magic=[Text.Encoding]::ASCII.GetBytes('DITBKP01')
 $packagePath=[IO.Path]::GetFullPath($Package)
-$scratchRoot=Join-Path ([IO.Path]::GetTempPath()) 'diting-backup'
+$scratchRoot=Join-Path ([IO.Path]::GetTempPath()) 'artemis-backup'
 $stage=Join-Path $scratchRoot ([guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($stage)
-$passphrase=[Environment]::GetEnvironmentVariable('DITING_BACKUP_PASSPHRASE')
+$passphrase=[Environment]::GetEnvironmentVariable('ARTEMIS_BACKUP_PASSPHRASE')
 $preserveStage=$false
-if([string]::IsNullOrEmpty($passphrase) -or $passphrase.Length -lt 16){throw 'DITING_BACKUP_PASSPHRASE must contain at least 16 characters. Never pass it on the command line.'}
+if([string]::IsNullOrEmpty($passphrase) -or $passphrase.Length -lt 16){throw 'ARTEMIS_BACKUP_PASSPHRASE must contain at least 16 characters. Never pass it on the command line.'}
 
 function Read-Exact([IO.Stream]$stream,[int]$length){
  $bytes=[byte[]]::new($length);$offset=0
@@ -107,7 +108,7 @@ function Verify-Archive([IO.Compression.ZipArchive]$archive){
 }
 try{
  if($Mode -eq 'Backup'){
-  if(!$OfflineAcknowledged){throw 'Stop DITING and its proxy first, then use -OfflineAcknowledged. This provides database/file consistency.'}
+  if(!$OfflineAcknowledged){throw 'Stop Artemis and its proxy first, then use -OfflineAcknowledged. This provides database/file consistency.'}
   if(Test-Path -LiteralPath $packagePath){throw 'Output package exists; choose a new filename.'}
   if(!$DataDir){throw 'DataDir is required.'}
   foreach($root in @($DataDir,$SkillsDir)|Where-Object{$_}){$absolute=[IO.Path]::GetFullPath($root).TrimEnd([IO.Path]::DirectorySeparatorChar)+[IO.Path]::DirectorySeparatorChar;if($packagePath.StartsWith($absolute,[StringComparison]::OrdinalIgnoreCase)){throw 'Package must be outside source directories.'}}
@@ -118,7 +119,7 @@ try{
    if($IncludeLocalCredentials){if($ConfigFile){$files+=Add-File $archive ([IO.Path]::GetFullPath($ConfigFile)) 'local/config.json'};if($SigningKey){$files+=Add-File $archive ([IO.Path]::GetFullPath($SigningKey)) 'local/jwt.key'}}
    $schemaFile=Join-Path $PSScriptRoot '../db/schema.sql'
    $schemaHash=if(Test-Path -LiteralPath $schemaFile){(Get-FileHash -LiteralPath $schemaFile -Algorithm SHA256).Hash}else{'unavailable'}
-   $manifest=@{format_version=1;application='DITING';schema_sha256=$schemaHash;created_at=[DateTimeOffset]::UtcNow.ToString('o');consistency='offline_user_asserted';database='complete PostgreSQL custom dump';credentials='Database includes stored credentials; whole package encrypted. Local config/signing key included only on explicit selection.';local_credentials_selected=[bool]$IncludeLocalCredentials;files=$files}
+   $manifest=@{format_version=1;application='Artemis';schema_sha256=$schemaHash;created_at=[DateTimeOffset]::UtcNow.ToString('o');consistency='offline_user_asserted';database='complete PostgreSQL custom dump';credentials='Database includes stored credentials; whole package encrypted. Local config/signing key included only on explicit selection.';local_credentials_selected=[bool]$IncludeLocalCredentials;files=$files}
    $entry=$archive.CreateEntry('manifest.json');$writer=[IO.StreamWriter]::new($entry.Open(),[Text.UTF8Encoding]::new($false));try{$writer.Write(($manifest|ConvertTo-Json -Depth 8))}finally{$writer.Dispose()}
   }finally{$archive.Dispose();$zipStream.Dispose()}
   $tempPackage=$packagePath+'.partial-'+[guid]::NewGuid().ToString('N');Protect-Archive $zipPath $tempPackage;Move-Item -LiteralPath $tempPackage -Destination $packagePath

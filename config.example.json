@@ -5,9 +5,9 @@
   "database": {
     "host": "127.0.0.1",
     "port": 5433,
-    "user": "diting",
+    "user": "artemis",
     "password": "",
-    "dbname": "diting",
+    "dbname": "artemis",
     "sslmode": "disable"
   },
 

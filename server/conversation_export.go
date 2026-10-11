@@ -58,7 +58,7 @@ func (s *Server) exportConversation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "format must be md or json")
 		return
 	}
-	f, err := os.CreateTemp("", "diting-conversation-export-*")
+	f, err := os.CreateTemp("", "artemis-conversation-export-*")
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return

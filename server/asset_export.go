@@ -11,7 +11,7 @@ import (
 )
 
 func stagedDownload(w http.ResponseWriter, r *http.Request, name, contentType string, write func(*os.File) error) {
-	f, err := os.CreateTemp("", "diting-export-*")
+	f, err := os.CreateTemp("", "artemis-export-*")
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return

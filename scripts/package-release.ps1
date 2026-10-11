@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$packageRoot = Join-Path $repoRoot "dist/artex-$Version-windows-amd64"
+$packageRoot = Join-Path $repoRoot "dist/artemis-$Version-windows-amd64"
 $archivePath = "$packageRoot.zip"
 if ((Test-Path -LiteralPath $packageRoot) -or (Test-Path -LiteralPath $archivePath)) {
     throw 'Output already exists. Save and move it before rebuilding this version.'
@@ -35,7 +35,7 @@ try {
     }
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     $env:CGO_ENABLED = '0'
-    & go build -trimpath -tags embedui -ldflags "-s -w -buildid= -X main.version=$Version" -o (Join-Path $packageRoot 'artex.exe') ./cmd/artex
+    & go build -trimpath -tags embedui -ldflags "-s -w -buildid= -X main.version=$Version" -o (Join-Path $packageRoot 'artemis.exe') ./cmd/artex
     if ($LASTEXITCODE -ne 0) { throw 'Go build failed' }
     foreach ($name in @('start.bat', 'config.example.json', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $packageRoot

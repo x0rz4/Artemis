@@ -46,7 +46,7 @@ func (s *Server) exportTraffic(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		} else {
-			if _, err := io.WriteString(out, `{"log":{"version":"1.2","creator":{"name":"DITING","version":"1"},"comment":"未采集网络 timing；time/timings 使用 -1。正文按完整原始字节导出为 base64；请求正文使用扩展字段 _encoding。","entries":[`); err != nil {
+			if _, err := io.WriteString(out, `{"log":{"version":"1.2","creator":{"name":"Artemis","version":"1"},"comment":"未采集网络 timing；time/timings 使用 -1。正文按完整原始字节导出为 base64；请求正文使用扩展字段 _encoding。","entries":[`); err != nil {
 				return err
 			}
 		}

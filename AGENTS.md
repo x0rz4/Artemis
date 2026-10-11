@@ -1,10 +1,10 @@
-# DITING 开发指南
+# Artemis 开发指南
 
-Go 后端、PostgreSQL、Next.js 静态前端。基于 ARTEX；Go module/import 和 `ARTEX_*` 环境变量保留兼容名称。发布/更新源为 `bluechips-zhao/DITING`。
+Go 后端、PostgreSQL、Next.js 静态前端。产品名 **Artemis**（可执行文件 `artemis.exe` / `artemis`，页面品牌、日志、导出文件名统一用它）；基于 ARTEX，Go module/import（`github.com/Autumn-27/artex`）和 `ARTEX_*` 环境变量是保留的内部兼容名称，不是产品名。自更新发布源是 `selfupdate/github.go` 里的 `Repo` 常量，当前为占位值 `TO_BE_SET`——未填写时检查更新会直接返回"更新源未配置"并拒绝联网。
 
 ## 构建与配置
 
-- Windows：`build.bat` 安装依赖、导出静态资源、内嵌生成 `diting.exe`。发布包使用 `scripts/package-release.ps1 -Version 2.3.0`。
+- Windows：`build.bat` 安装依赖、导出静态资源、内嵌生成 `artemis.exe`。发布包使用 `scripts/package-release.ps1 -Version 2.3.0`（产物 `dist/artemis-<版本>-windows-amd64.zip`）。
 - Bash：`./build.sh --target linux/amd64`。使用 `ARTEX_BUILD_VERSION` 指定内嵌版本。
 - Go 最低版本见 `go.mod`；前端使用 Node.js 22、npm 锁文件。
 - 正式构建必须使用 `-tags embedui` 和已生成的静态资源。
@@ -25,7 +25,8 @@ Go 后端、PostgreSQL、Next.js 静态前端。基于 ARTEX；Go module/import 
 | 幂等迁移 | `db/schema.sql`、`db/db.go` |
 | 提示词 | `agent/promptcatalog.go`、`agent/worker.go`、`server/orchestration.go` |
 | 工具定义与绑定 | `agent/toolcatalog.go`、`agent/tools*.go`、`server/orchestration.go` |
-| 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go` |
+| 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go`（`Repo` 占位值） |
+| 产品命名 | 品牌串只在 `web/src/config/app-config.ts`、登录/初始化页、侧边栏、`cmd/artex/main.go` 的 banner 与日志；二进制与包名在 `build.bat`、`build.sh`、`start.bat`、`start.sh`、`Dockerfile`、`scripts/package-release.ps1` |
 
 提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`。
 

@@ -48,42 +48,42 @@ html.dark[data-theme-preset="default"] {
   --sidebar-accent-foreground: #d7e9d9;
   --sidebar-border: #323a32;
 }
-.diting-workspace {
+.artemis-workspace {
   padding: 12px;
   gap: 12px;
 }
-.diting-workspace [data-slot="sidebar-inner"] {
+.artemis-workspace [data-slot="sidebar-inner"] {
   border-radius: 24px;
 }
-.diting-workspace [data-slot="sidebar-container"] {
+.artemis-workspace [data-slot="sidebar-container"] {
   padding: 12px 0 12px 12px;
 }
-.diting-workspace [data-slot="sidebar-header"] {
+.artemis-workspace [data-slot="sidebar-header"] {
   padding: 22px 14px 16px;
 }
-.diting-workspace [data-slot="sidebar-footer"] {
+.artemis-workspace [data-slot="sidebar-footer"] {
   padding: 12px;
 }
-.diting-workspace [data-slot="sidebar-group-label"] {
+.artemis-workspace [data-slot="sidebar-group-label"] {
   font-size: 10px;
   letter-spacing: 0.12em;
   padding-inline: 12px;
   height: 30px;
 }
-.diting-workspace [data-slot="sidebar-menu-button"] {
+.artemis-workspace [data-slot="sidebar-menu-button"] {
   height: 35px;
   border-radius: 12px;
   padding-inline: 12px;
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.diting-workspace [data-slot="sidebar-menu-button"][data-active="true"] {
+.artemis-workspace [data-slot="sidebar-menu-button"][data-active="true"] {
   background: var(--sidebar-accent);
   color: var(--sidebar-accent-foreground);
   box-shadow: 0 2px 7px #00000006;
   font-weight: 600;
 }
-.diting-workspace [data-slot="sidebar-menu-button"][data-active="true"]::after {
+.artemis-workspace [data-slot="sidebar-menu-button"][data-active="true"]::after {
   content: "";
   width: 5px;
   height: 5px;
@@ -91,7 +91,7 @@ html.dark[data-theme-preset="default"] {
   background: currentColor;
   margin-left: auto;
 }
-.diting-surface {
+.artemis-surface {
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--background);
@@ -372,11 +372,11 @@ html.dark[data-theme-preset="default"] {
   }
 }
 @media (max-width: 767px) {
-  .diting-workspace {
+  .artemis-workspace {
     padding: 0;
     gap: 0;
   }
-  .diting-surface {
+  .artemis-surface {
     border: 0;
     border-radius: 0;
   }

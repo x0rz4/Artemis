@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the DITING sonar logo (rounded dark tile + three sonar arcs + dot) to
+"""Render the Artemis sonar logo (rounded dark tile + three sonar arcs + dot) to
 icon.png (512x512, replaces web/src/app/icon.png) and favicon.ico (16/32/48)."""
 from PIL import Image, ImageDraw
 from pathlib import Path

@@ -2,26 +2,26 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-artex}
+      POSTGRES_USER: ${POSTGRES_USER:-artemis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-artex}
+      POSTGRES_DB: ${POSTGRES_DB:-artemis}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-artex} -d ${POSTGRES_DB:-artex}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-artemis} -d ${POSTGRES_DB:-artemis}"]
       interval: 5s
       timeout: 3s
       retries: 10
     restart: unless-stopped
 
-  artex:
-    # Prepare dist/<arch>/artex and build Dockerfile locally before using compose.
-    image: diting:local
+  artemis:
+    # Prepare dist/<arch>/artemis and build Dockerfile locally before using compose.
+    image: artemis:local
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      ARTEX_PG_DSN: postgres://${POSTGRES_USER:-artex}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-artex}?sslmode=disable
+      ARTEX_PG_DSN: postgres://${POSTGRES_USER:-artemis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-artemis}?sslmode=disable
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ARTEX_LLM_PROVIDER: ${ARTEX_LLM_PROVIDER:-}

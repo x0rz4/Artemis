@@ -4,8 +4,8 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem ============================================
-rem  谛听 DITING 一键构建（Windows）
-rem  前端静态导出 -> 内嵌 -> Go 单二进制 diting.exe
+rem  Artemis 一键构建（Windows）
+rem  前端静态导出 -> 内嵌 -> Go 单二进制 artemis.exe
 rem ============================================
 
 rem 使用 PATH 中的 Go；工具链不依赖开发者机器路径。
@@ -28,10 +28,10 @@ if errorlevel 8 (echo [ERR] 拷贝失败 & exit /b 1)
 echo [4/4] 编译单二进制...
 set "CGO_ENABLED=0"
 set "GOPROXY=https://goproxy.cn,direct"
-go build -trimpath -tags embedui -ldflags "-s -w -X main.version=2.3.0" -o diting.exe ./cmd/artex || (echo [ERR] Go 编译失败 & exit /b 1)
+go build -trimpath -tags embedui -ldflags "-s -w -X main.version=2.3.0" -o artemis.exe ./cmd/artex || (echo [ERR] Go 编译失败 & exit /b 1)
 
 echo.
 echo ============================================
-echo  构建完成: %CD%\diting.exe
-echo  启动: diting.exe -addr :8787 -proxy :8788
+echo  构建完成: %CD%\artemis.exe
+echo  启动: artemis.exe -addr :8787 -proxy :8788
 echo ============================================

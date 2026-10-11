@@ -21,7 +21,7 @@ const (
 	authPassKey      = "auth.password_hash"
 	jwtTTL           = 7 * 24 * time.Hour
 	keyChars         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	defaultUsername  = "diting"
+	defaultUsername  = "artemis"
 
 	// 下限与 setup 页的前端校验一致——校验只放在前端等于没放，直接打 API 就能
 	// 绕过。上限是 bcrypt 的硬限制：超过 72 字节 GenerateFromPassword 会返回

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ARTEX cross-platform release builder.
+# Artemis cross-platform release builder.
 #
 # The default mode builds one target and embeds the already-exported frontend.
 # `./build.sh --release` builds and packages all supported desktop/server targets.
@@ -165,7 +165,7 @@ package_binary() {
   binary="$1"
   goos="$2"
   goarch="$3"
-  package_name="artex-${ARTEX_BUILD_VERSION}-${goos}-${goarch}"
+  package_name="artemis-${ARTEX_BUILD_VERSION}-${goos}-${goarch}"
   package_root="${ARTEX_PACKAGE_DIR}/${package_name}"
   archive="${ARTEX_PACKAGE_DIR}/${package_name}.zip"
 
@@ -210,12 +210,12 @@ build_target() {
     *) die "不支持的系统：$goos（支持 linux、darwin、windows）" ;;
   esac
 
-  binary_name="artex"
-  [ "$goos" = "windows" ] && binary_name="artex.exe"
+  binary_name="artemis"
+  [ "$goos" = "windows" ] && binary_name="artemis.exe"
   if [ -n "${ARTEX_OUTPUT:-}" ] && [ "$ARTEX_RELEASE" != "1" ]; then
     output="$ARTEX_OUTPUT"
   else
-    output="${ARTEX_OUTPUT_DIR}/artex-${goos}-${goarch}/${binary_name}"
+    output="${ARTEX_OUTPUT_DIR}/artemis-${goos}-${goarch}/${binary_name}"
   fi
   mkdir -p "$(dirname "$output")"
 

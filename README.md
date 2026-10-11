@@ -1,8 +1,8 @@
-# 谛听 DITING
+# Artemis
 
 LLM 驱动的自主渗透测试工作台 · Go + Next.js + PostgreSQL
 
-[下载发行版](https://github.com/bluechips-zhao/DITING/releases) · [界面截图](#界面预览) · [开始使用](#开始使用)
+[界面截图](#界面预览) · [开始使用](#开始使用) · [从源码构建](#从源码构建)
 
 基于 [ARTEX](https://github.com/Autumn-27/ARTEX) 改造，保留资产图、任务探索、多代理协作、流量证据和人工审批，增加预算、证据关系、报告版本、完整导出与加密备份恢复。前端参考 Amicro，支持深浅主题与移动端。仅用于拥有或明确获得授权的目标。
 
@@ -35,15 +35,15 @@ LLM 驱动的自主渗透测试工作台 · Go + Next.js + PostgreSQL
 
 ### Windows 发行包
 
-1. 从 [Releases](https://github.com/bluechips-zhao/DITING/releases) 下载 Windows amd64 zip，解压到新的目录。
+1. 用 `scripts/package-release.ps1` 生成 Windows amd64 zip（见[从源码构建](#从源码构建)），解压到新的目录。
 2. 准备 PostgreSQL 16 或更新版本。可连接自己的数据库，或仅用 Docker 创建空库：
 
    ```powershell
-   docker run -d --name diting-postgres -p 127.0.0.1:5433:5432 -e POSTGRES_USER=diting -e POSTGRES_PASSWORD=YOUR_DATABASE_PASSWORD -e POSTGRES_DB=diting -v diting-pgdata:/var/lib/postgresql/data postgres:16
+   docker run -d --name artemis-postgres -p 127.0.0.1:5433:5432 -e POSTGRES_USER=artemis -e POSTGRES_PASSWORD=YOUR_DATABASE_PASSWORD -e POSTGRES_DB=artemis -v artemis-pgdata:/var/lib/postgresql/data postgres:16
    ```
 
    将 `YOUR_DATABASE_PASSWORD` 换成自己的强密码。
-3. 复制 `config.example.json` 为 `config.json`，填自己的数据库参数。示例是 `127.0.0.1:5433`、用户/数据库 `diting`，密码为空，必须填写。`skill_dir` 留空使用程序旁的 `skills/`。
+3. 复制 `config.example.json` 为 `config.json`，填自己的数据库参数。示例是 `127.0.0.1:5433`、用户/数据库 `artemis`，密码为空，必须填写。`skill_dir` 留空使用程序旁的 `skills/`。
 4. 运行 `start.bat`，或在 PowerShell 中：
 
    ```powershell
@@ -52,7 +52,7 @@ LLM 驱动的自主渗透测试工作台 · Go + Next.js + PostgreSQL
 
 5. 打开 [本地工作台](http://localhost:8787)，首次进入初始化页，设置至少 8 位登录密码。在「系统 → LLM」添加自己的模型，再创建企业、资产、任务或对话。
 
-发行包内部可执行文件名保留 `artex.exe`，产品品牌为 DITING。启动脚本也支持源码构建的 `diting.exe`。原有 `ARTEX_*` 环境变量保留兼容名称，`ARTEX_PG_DSN` 优先于配置文件；如之前设置过，请确认它指向预期数据库。
+发行包内可执行文件名为 `artemis.exe`。原有 `ARTEX_*` 环境变量与 Go module 路径保留兼容名称——它们是内部标识，不是产品名；`ARTEX_PG_DSN` 优先于配置文件，如之前设置过，请确认它指向预期数据库。
 
 本次首发提供 Windows amd64 包。其他平台可从源码编译；跨平台 CI 的结果以对应运行记录为准。
 
@@ -61,8 +61,7 @@ LLM 驱动的自主渗透测试工作台 · Go + Next.js + PostgreSQL
 需要 Go **1.26.3 或更新版本**、Node.js **22**、npm 和 PostgreSQL。
 
 ```powershell
-git clone https://github.com/bluechips-zhao/DITING.git
-cd DITING
+# 在 Artemis 源码目录下
 .\build.bat
 Copy-Item config.example.json config.json
 # 编辑 config.json 后启动
@@ -83,7 +82,7 @@ Linux/macOS 需要 Bash、rsync；打包还需 zip：
 ./build.sh --target linux/amd64
 cp config.example.json config.json
 # 编辑 config.json 后启动
-./dist/artex-linux-amd64/artex -addr 127.0.0.1:8787 -proxy 127.0.0.1:8788
+./dist/artemis-linux-amd64/artemis -addr 127.0.0.1:8787 -proxy 127.0.0.1:8788
 ```
 
 ### 开发模式
@@ -96,10 +95,10 @@ cp config.example.json config.json
 - 不提交或转发 `config.json`、`.env`、`jwt.key`、`data/`、日志、抓包和备份；源码忽略规则覆盖这些文件。
 - 制作一致备份前停止任务、应用和代理；恢复使用新的空数据库与新的数据目录。
 - 连接已有数据库会保留原有记录并执行幂等迁移。“首次为空白”指新建数据库，不会清空旧数据库。
-- 下载包可与发行页 `SHA256SUMS` 对比：`Get-FileHash .\artex-2.3.0-windows-amd64.zip -Algorithm SHA256`。
+- 打包脚本同时生成 `dist/SHA256SUMS`，可与发布包对比：`Get-FileHash .\artemis-2.3.0-windows-amd64.zip -Algorithm SHA256`。
 
 ## 许可证与来源
 
 遵守 [AGPL-3.0](LICENSE)，保留 ARTEX 源码来源及版权。修改后通过网络向其他用户提供服务时，按许可证提供对应源码。
 
-字体和前端模板许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。UI 参考 [Amicro](https://github.com/Subhan-code/Amicro--Micro-transitions-)，产品布局与流程按 DITING 调整。
+字体和前端模板许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。UI 参考 [Amicro](https://github.com/Subhan-code/Amicro--Micro-transitions-)，产品布局与流程按 Artemis 调整。

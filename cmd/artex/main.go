@@ -27,17 +27,17 @@ import (
 var version = "dev"
 
 const banner = `
-  ____  ___ _____ _____ _   _
- |  _ \|_ _|_   _| ____| \ | |
- | | | || |  | | |  _| |  \| |
- | |_| || |  | | | |___| |\  |
- |____/___| |_| |_____|_| \_|
+    _     ____   _____  _____  __  __  ___  ____
+   / \   |  _ \ |_   _|| ____||  \/  ||_ _|/ ___|
+  / _ \  | |_) |  | |  |  _|  | |\/| | | | \___ \
+ / ___ \ |  _ <   | |  | |___ | |  | | | |  ___) |
+/_/   \_\|_| \_\  |_|  |_____||_|  |_||___||____/
 `
 
 // printBanner writes the startup banner + version/runtime info to stdout.
 func printBanner(addr string) {
 	fmt.Print(banner)
-	fmt.Println("  谛听 DITING · 个人自主渗透助手")
+	fmt.Println("  Artemis · 个人自主渗透助手")
 	fmt.Printf("  版本 %s  ·  %s/%s  ·  %s  ·  监听 %s\n\n",
 		version, runtime.GOOS, runtime.GOARCH, runtime.Version(), addr)
 }
@@ -120,7 +120,7 @@ func run() int {
 	}
 
 	go func() {
-		log.Printf("ARTEX %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
+		log.Printf("Artemis %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}

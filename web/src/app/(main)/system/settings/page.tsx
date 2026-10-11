@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { BackupPanel } from "@/components/backup-panel";
+import { UpdateCard } from "./_components/update-card";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
 import type { Settings } from "@/lib/types";
 
@@ -267,7 +268,7 @@ export default function SystemSettingsPage() {
           column-gap 只管列间距，行间距要由子元素自己给。 */}
       <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
         <div className="mb-4 break-inside-avoid md:mb-6"><BackupPanel/><MigrationPanel/></div>
-        {/* TODO: 版本更新卡片暂撤——等 fork 上 GitHub 有稳定 release 后再加回来（组件保留在 ./_components/update-card） */}
+        <UpdateCard />
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">

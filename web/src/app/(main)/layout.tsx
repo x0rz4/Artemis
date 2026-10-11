@@ -61,7 +61,7 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
 
   return (
     <SidebarProvider
-      className="diting-workspace"
+      className="artemis-workspace"
       defaultOpen={defaultOpen}
       style={
         {
@@ -77,7 +77,7 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
           "[html[data-content-layout=centered]_&>*]:max-w-screen-2xl",
           "peer-data-[variant=inset]:border",
           "[--dashboard-header-height:72px]",
-          "diting-surface min-w-0 overflow-x-hidden",
+          "artemis-surface min-w-0 overflow-x-hidden",
         )}
       >
         <MainContent>{children}</MainContent>
