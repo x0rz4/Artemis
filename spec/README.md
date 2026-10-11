@@ -29,6 +29,9 @@
 - [开发规范协作](specs/development/spec.md)：统一入口、规则归属与变更完成条件。
 - [自更新](specs/self-update/spec.md)：固定发布源、检查更新、下载校验与换装回滚。
 - [观测](specs/observability/spec.md)：日志文本契约与 task/intent/tool/decision 事件字段。
+- [工具库与技能库](specs/tool-library/spec.md)：磁盘真源、单向导入、多源并集同步、快照回滚与写锁。
+- [任务预算与收尾](specs/task-budget/spec.md)：保守预留与结算、额度耗尽收尾、空转保护与步数与时长上限。
+- [备份与恢复](specs/backup-restore/spec.md)：离线加密备份、隔离恢复到空库空目录、迁移状态。
 
 其余业务能力尚未逐项建立 SPEC。现有约束先以 PROJECT.md 为准；首次改动某能力时，阅读代码与测试补充涉及的现行行为，并区分已验证事实与待确认问题，不虚构完整覆盖。
 
