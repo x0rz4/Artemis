@@ -110,6 +110,8 @@ bash install.sh --mode local --database docker
 
 5. 打开 [本地工作台](http://localhost:8787)，首次进入初始化页，设置至少 8 位登录密码。在「系统 → LLM」添加自己的模型，再创建企业、资产、任务或对话。
 
+发行包由 `start.bat` 守护启动，可在「系统 → 设置 → 版本与更新」检查并一键升级到 [Artemis 发布源](https://github.com/x0rz4/Artemis/releases) 上的最新正式版：下载本平台 zip、比对 `SHA256SUMS`、冒烟测试通过后换装，启动失败会自动回滚。容器部署不适用这条路径，更新仍使用 `docker compose pull`。
+
 发行包内可执行文件名为 `artemis.exe`。原有 `ARTEX_*` 环境变量与 Go module 路径保留兼容名称——它们是内部标识，不是产品名；`ARTEX_PG_DSN` 优先于配置文件，如之前设置过，请确认它指向预期数据库。
 
 本次首发提供 Windows amd64 包。其他平台可从源码编译；跨平台 CI 的结果以对应运行记录为准。

@@ -1,6 +1,6 @@
 # Artemis 项目约束
 
-Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [统一风格规范](STYLE.md)。自更新发布源是 `selfupdate/github.go` 里的 `Repo` 常量，当前为占位值 `TO_BE_SET`——未填写时检查更新会直接返回"更新源未配置"并拒绝联网。
+Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [统一风格规范](STYLE.md)。自更新发布源是 `selfupdate/github.go` 里的 `Repo` 常量，写死为 `x0rz4/Artemis`，不得做成配置项；置空或保留占位值时检查更新只返回"更新源未配置"并拒绝联网。换源必须同时改 `Repo`、`allowedHosts` 域名名单，并确认该源的资产命名与校验和口径一致。
 
 ## 构建与配置
 
@@ -25,7 +25,7 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 | 幂等迁移 | `db/schema.sql`、`db/db.go` |
 | 提示词 | `agent/promptcatalog.go`、`agent/worker.go`、`server/orchestration.go` |
 | 工具定义与绑定 | `agent/toolcatalog.go`、`agent/tools*.go`、`server/orchestration.go` |
-| 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go`（`Repo` 占位值） |
+| 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go`（`Repo` 发布源） |
 | 工具库 | `server/toollib.go`（清单与导入）、`server/toollib_upload.go`（上传/安装器）、`server/toollib_check.go`（自检）、`server/toollib_command.go`（审计用命令渲染）、`server/toollib_sync.go`（多源同步）、`web/src/app/(main)/system/tool-lib/page.tsx` |
 | 库源同步底座 | `server/synclib.go`（按源派生白名单、令牌、下载校验原子落盘）——工具库与技能库共用，新增源类型只改这里 |
 | 技能库 | `server/skillsrc.go`（多扫描根 + 源同步）、`server/server_mgmt.go` 的 `fs*Skill*`、`web/src/app/(main)/system/skills/_components/skill-sources.tsx` |

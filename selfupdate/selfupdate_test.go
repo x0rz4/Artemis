@@ -415,6 +415,27 @@ func TestAssetNameMatchesBuildScript(t *testing.T) {
 	}
 }
 
+func TestReleaseSourceIsUsable(t *testing.T) {
+	// 发布源写错一个字，所有平台的一键更新都会停在 404 上，而且要到用户点更新时才暴露，
+	// 所以把它钉在测试里：已配置、owner/repo 形式、地址符合 GitHub 正式 Release 接口、能过白名单。
+	if !repoConfigured() {
+		t.Fatal("发布源未配置：selfupdate/github.go 的 Repo 不能为空或占位值")
+	}
+	if strings.Count(Repo, "/") != 1 || strings.HasPrefix(Repo, "/") || strings.HasSuffix(Repo, "/") {
+		t.Fatalf("Repo 必须是 owner/repo 形式，当前为 %q", Repo)
+	}
+	u, err := url.Parse(latestURL)
+	if err != nil {
+		t.Fatalf("解析发布源地址 %q: %v", latestURL, err)
+	}
+	if u.Hostname() != "api.github.com" || u.Path != "/repos/"+Repo+"/releases/latest" {
+		t.Fatalf("发布源地址不是 GitHub 正式 Release 接口：%s", latestURL)
+	}
+	if err := checkURL(u); err != nil {
+		t.Fatalf("发布源地址被升级白名单拒绝，检查更新会永久失败：%v", err)
+	}
+}
+
 func mustParse(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)

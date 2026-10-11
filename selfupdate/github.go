@@ -13,9 +13,13 @@ import (
 // Repo 是发布源（owner/repo）。写死而不是做成配置项：更新源可配等于给任何能改配置的人一条
 // 远程代码执行通道，对一个渗透测试平台来说这个口子开不得。
 //
-// 维护者事项：换成 Artemis 自己的发布源之前，这里保持占位值 TO_BE_SET——
-// FetchLatest 会直接返回"更新源未配置"，不会去请求一个不存在的仓库。
-const Repo = "TO_BE_SET"
+// 维护者事项：换成别的发布源（例如自建 fork）要同时改三处——这里的 Repo、allowedHosts
+// 的域名名单，以及确认该源的 Release 资产命名符合 AssetName、随包提供 sumsAsset。
+// 只改 Repo 指向 GitHub 之外的源，会在 checkURL 那一步直接失败。
+//
+// 置空或保留占位值 TO_BE_SET（例如 fork 还没搭好自己的发布链路）时，FetchLatest 返回
+// "更新源未配置"，不会去请求一个不存在的仓库。
+const Repo = "x0rz4/Artemis"
 
 // repoConfigured 报告发布源是否已经填好。
 func repoConfigured() bool {
@@ -99,7 +103,7 @@ func checkURL(u *url.URL) error {
 // FetchLatest 查询最新正式版。
 func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 	if !repoConfigured() {
-		return nil, fmt.Errorf("更新源未配置：请先把 selfupdate/github.go 的 Repo 填成 Artemis 的发布源（当前为占位值 %q）", Repo)
+		return nil, fmt.Errorf("更新源未配置：selfupdate/github.go 的 Repo 为空或仍是占位值 %q", Repo)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
 	if err != nil {
