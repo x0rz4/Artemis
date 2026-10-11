@@ -16,11 +16,13 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// 工具库上传：单文件（二进制/脚本/JAR）或 zip（目录型工具、带 manifest-entry.json 的包）。
+// 工具安装（上传与多源同步共用）。
 //
 // 落盘位置与清单条目一一对应：data/tools/<name>（单文件）或 data/tools/<name>/...（zip）。
-// 上传成功后立刻注册成 kind=command 的自定义工具，Agent 无需等待即可调用——但工具调用
-// 依旧要过拦截规则与人工审批，上传动作本身不授予任何额外执行权限。
+// 安装成功后调用方负责写清单与注册工具行，Agent 无需等待即可调用——但工具调用依旧要过
+// 拦截规则与人工审批，安装动作本身不授予任何额外执行权限。
+//
+// 元数据优先级：调用方给的期望值（表单 / 源条目）> 包内 manifest-entry.json > 按内容推断。
 
 const (
 	// 单个上传文件上限。渗透工具二进制常有几十 MB，给足余量；上限同时约束 zip 内单个文件。
@@ -32,7 +34,7 @@ const (
 )
 
 // validToolRuntime 报告 runtime 是否为受支持的值（"" = 原生二进制）。
-// 在上传阶段就拦住错值：等导入时才发现的话，文件已经落盘、清单也写进去了。
+// 在安装阶段就拦住错值：等导入时才发现的话，文件已经落盘、清单也写进去了。
 func validToolRuntime(rt string) bool {
 	switch strings.ToLower(strings.TrimSpace(rt)) {
 	case "", "python3", "python", "node", "php", "java":
@@ -54,6 +56,77 @@ func validToolName(name string) string {
 		return "名称不能包含路径分隔符"
 	}
 	return ""
+}
+
+// overlayToolEntry 用非空字段覆盖基础条目（"调用方 > 包内元数据 > 内容推断"）。
+func overlayToolEntry(base *toolEntry, over toolEntry) {
+	if over.Key != "" {
+		base.Key = over.Key
+	}
+	if over.Purpose != "" {
+		base.Purpose = over.Purpose
+	}
+	if over.Version != "" {
+		base.Version = over.Version
+	}
+	if over.Platform != "" {
+		base.Platform = over.Platform
+	}
+	if over.SHA256 != "" {
+		base.SHA256 = over.SHA256
+	}
+	if over.URL != "" {
+		base.URL = over.URL
+	}
+	if over.Kind != "" {
+		base.Kind = over.Kind
+	}
+	if over.Runtime != "" {
+		base.Runtime = over.Runtime
+	}
+	if over.Entry != "" {
+		base.Entry = over.Entry
+	}
+	if over.Category != "" {
+		base.Category = over.Category
+	}
+	if over.Source != "" {
+		base.Source = over.Source
+	}
+	if len(over.Schema) > 0 {
+		base.Schema = over.Schema
+	}
+	if len(over.Agents) > 0 {
+		base.Agents = over.Agents
+	}
+	if over.Enabled != nil {
+		base.Enabled = over.Enabled
+	}
+	if over.Deferred {
+		base.Deferred = true
+	}
+}
+
+// swapDir 把 stage 目录落地到 target。目标已存在且允许覆盖时，先把旧目录改名到
+// <target>.old-sync，新目录落地失败就把它改回来 —— 覆盖更新不该以"原有工具消失"为代价。
+func swapDir(src, target string, overwrite bool) error {
+	if _, err := os.Stat(target); err == nil {
+		if !overwrite {
+			return fmt.Errorf("已存在同名工具 %s", filepath.Base(target))
+		}
+		old := target + ".old-sync"
+		_ = os.RemoveAll(old)
+		if err := os.Rename(target, old); err != nil {
+			return err
+		}
+		if err := os.Rename(src, target); err != nil {
+			_ = os.Rename(old, target)
+			return err
+		}
+		_ = os.RemoveAll(old)
+		return nil
+	}
+	return os.Rename(src, target)
 }
 
 // openToolZip 打开磁盘上的 zip 并注册额外解压器（与 skill 上传同一套：bzip2 / zstd）。
@@ -173,223 +246,9 @@ func stripCommonTopDir(files []string) (string, bool) {
 	return top, top != ""
 }
 
-// tlUpload 安装一个工具，并立即注册成可调用的工具行。
-func (s *Server) tlUpload(w http.ResponseWriter, r *http.Request) {
-	pg := s.pg(w)
-	if pg == nil {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxToolUploadBytes+1<<20)
-	file, hdr, err := r.FormFile("file")
-	if err != nil {
-		writeErr(w, 400, "缺少上传文件(表单字段 file)或超出大小限制")
-		return
-	}
-	defer file.Close()
-
-	dir := s.toolsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	// 先落到同目录的临时文件：后面按磁盘路径解析 zip / 计算摘要，也保证 rename 是同盘操作。
-	tmp, err := os.CreateTemp(dir, ".upload-*")
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := io.Copy(tmp, file); err != nil {
-		tmp.Close()
-		writeErr(w, 400, "读取上传内容失败："+err.Error())
-		return
-	}
-	if err := tmp.Close(); err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		base := path.Base(filepath.ToSlash(hdr.Filename))
-		name = strings.TrimSuffix(base, path.Ext(base))
-	}
-	if msg := validToolName(name); msg != "" {
-		writeErr(w, 400, "工具名称无效："+msg)
-		return
-	}
-	overwrite := r.URL.Query().Get("overwrite") == "true"
-
-	entry := toolEntry{Name: name, Source: "uploaded"}
-	if isZipFile(tmpName) {
-		entry, err = s.installToolZip(r, tmpName, name, overwrite)
-	} else {
-		entry, err = s.installToolFile(r, tmpName, name, overwrite)
-	}
-	if err != nil {
-		writeErr(w, 400, err.Error())
-		return
-	}
-
-	m, err := s.loadToolManifest()
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	if err := appendOrReplaceEntry(m, entry); err != nil {
-		writeErr(w, 400, err.Error())
-		return
-	}
-	if err := s.saveToolManifest(m); err != nil {
-		writeErr(w, 500, "写入工具清单失败："+err.Error())
-		return
-	}
-
-	// 上传即注册：清单条目的 agents/enabled 优先，缺省绑全部 agent（见 toolEntryToRow）。
-	row, err := s.toolEntryToRow(entry, s.allAgentKeys())
-	if err != nil {
-		writeErr(w, 500, "清单已写入，但注册工具失败："+err.Error())
-		return
-	}
-	created, err := pg.UpsertLibraryTool(row, entry.overwriteBinding())
-	if err != nil {
-		writeErr(w, 500, "清单已写入，但注册工具失败："+err.Error())
-		return
-	}
-	s.invalidateCommandTemplates()
-	writeJSON(w, 201, map[string]any{
-		"name": entry.Name, "key": row.Key, "path": entry.Path, "kind": entry.Kind,
-		"runtime": entry.Runtime, "entry": entry.Entry, "created": created,
-	})
-}
-
-// installToolFile 安装单文件工具（二进制 / 脚本 / JAR）。
-func (s *Server) installToolFile(r *http.Request, tmpName, name string, overwrite bool) (toolEntry, error) {
-	kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
-	if kind == "" {
-		kind = "binary"
-	}
-	switch kind {
-	case "binary", "script", "jar":
-	default:
-		return toolEntry{}, fmt.Errorf("单文件上传的 kind 只能是 binary/script/jar（当前 %q）", kind)
-	}
-	if rt := strings.ToLower(strings.TrimSpace(r.FormValue("runtime"))); !validToolRuntime(rt) {
-		return toolEntry{}, fmt.Errorf("不支持的 runtime %q（可用：python3/node/php/java，原生二进制留空）", rt)
-	}
-	target := filepath.Join(s.toolsDir(), name)
-	if _, err := os.Stat(target); err == nil && !overwrite {
-		return toolEntry{}, fmt.Errorf("已存在同名工具 %s（如需覆盖请确认后重试）", name)
-	}
-	if err := os.Rename(tmpName, target); err != nil {
-		return toolEntry{}, err
-	}
-	if err := chmodToolFile(target, kind); err != nil {
-		return toolEntry{}, err
-	}
-	sum, err := toolFileSHA256(target)
-	if err != nil {
-		return toolEntry{}, err
-	}
-	return toolEntry{
-		Name: name, Path: name, Kind: kind, Runtime: r.FormValue("runtime"),
-		Entry: r.FormValue("entry"), Purpose: r.FormValue("purpose"),
-		Version: r.FormValue("version"), SHA256: sum, Source: "uploaded",
-		Agents: splitAgents(r.FormValue("agents")),
-	}, nil
-}
-
-// installToolZip 安装 zip 工具包：解压到 data/tools/<name>/ 后按内容判定路径与入口。
-func (s *Server) installToolZip(r *http.Request, tmpName, name string, overwrite bool) (toolEntry, error) {
-	target := filepath.Join(s.toolsDir(), name)
-	if _, err := os.Stat(target); err == nil && !overwrite {
-		return toolEntry{}, fmt.Errorf("已存在同名工具 %s（如需覆盖请确认后重试）", name)
-	}
-	zr, err := openToolZip(tmpName)
-	if err != nil {
-		return toolEntry{}, err
-	}
-	defer zr.Close()
-
-	meta, err := readToolZipMeta(&zr.Reader)
-	if err != nil {
-		return toolEntry{}, err
-	}
-
-	stage, err := os.MkdirTemp(s.toolsDir(), ".extract-*")
-	if err != nil {
-		return toolEntry{}, err
-	}
-	defer os.RemoveAll(stage) // 落地成功后 stage 里的内容已被 rename 走
-	files, err := extractToolZip(&zr.Reader, stage)
-	if err != nil {
-		return toolEntry{}, err
-	}
-
-	// 打包整目录时（fscan.zip 里是 fscan/fscan）去掉共同的一级目录，直接把那一层
-	// rename 成安装目录：往父目录里 rename 同名目录在多数平台会失败，所以不动父目录。
-	src := stage
-	if top, ok := stripCommonTopDir(files); ok {
-		src = filepath.Join(stage, top)
-		stripped := make([]string, 0, len(files))
-		for _, f := range files {
-			stripped = append(stripped, strings.TrimPrefix(f, top+"/"))
-		}
-		files = stripped
-	}
-
-	// 元数据来源优先级：表单字段 > 包内 manifest-entry.json > 按内容推断。
-	e := toolEntry{Name: name, Source: "uploaded"}
-	if meta != nil {
-		e = *meta
-		e.Name = name
-		e.Source = "uploaded"
-	}
-	if v := strings.ToLower(strings.TrimSpace(r.FormValue("kind"))); v != "" {
-		e.Kind = v
-	}
-	if v := r.FormValue("runtime"); v != "" {
-		e.Runtime = v
-	}
-	if v := r.FormValue("entry"); v != "" {
-		e.Entry = v
-	}
-	if v := r.FormValue("purpose"); v != "" {
-		e.Purpose = v
-	}
-	if v := r.FormValue("version"); v != "" {
-		e.Version = v
-	}
-	if v := splitAgents(r.FormValue("agents")); len(v) > 0 {
-		e.Agents = v
-	}
-
-	entry, err := resolveZipLayout(e, files)
-	if err != nil {
-		return toolEntry{}, err
-	}
-
-	if overwrite {
-		_ = os.RemoveAll(target)
-	}
-	if err := os.Rename(src, target); err != nil {
-		return toolEntry{}, fmt.Errorf("安装失败：%w", err)
-	}
-	if entry.Kind != "dir" {
-		// 单文件包：原生可执行文件补执行位（脚本/JAR 交给解释器，不必可执行），并钉摘要。
-		abs := filepath.Join(s.toolsDir(), filepath.FromSlash(entry.Path))
-		_ = chmodToolFile(abs, entry.Kind)
-		if sum, herr := toolFileSHA256(abs); herr == nil {
-			entry.SHA256 = sum
-		}
-	}
-	return entry, nil
-}
-
 // resolveZipLayout 决定 zip 安装后的 path/kind/entry：
 //   - 包内只有一个文件 → 该文件就是工具（kind 缺省 binary），path = <name>/<file>；
-//   - 多个文件 → 目录型工具，必须有 entry（表单或 manifest-entry.json），path = <name>。
+//   - 多个文件 → 目录型工具，必须有 entry（调用方或 manifest-entry.json），path = <name>。
 func resolveZipLayout(e toolEntry, files []string) (toolEntry, error) {
 	if !validToolRuntime(e.Runtime) {
 		return e, fmt.Errorf("不支持的 runtime %q（可用：python3/node/php/java，原生二进制留空）", e.Runtime)
@@ -448,4 +307,215 @@ func splitAgents(v string) []string {
 		}
 	}
 	return out
+}
+
+// ---------- 安装器（上传与同步共用） ----------
+
+// installToolFile 安装单文件工具（二进制 / 脚本 / JAR）。
+func (s *Server) installToolFile(tmpName, name string, want toolEntry, overwrite bool) (toolEntry, error) {
+	if !validToolRuntime(want.Runtime) {
+		return toolEntry{}, fmt.Errorf("不支持的 runtime %q（可用：python3/node/php/java，原生二进制留空）", want.Runtime)
+	}
+	kind := strings.ToLower(strings.TrimSpace(want.Kind))
+	if kind == "" {
+		kind = "binary"
+	}
+	switch kind {
+	case "binary", "script", "jar":
+	default:
+		return toolEntry{}, fmt.Errorf("单文件安装的 kind 只能是 binary/script/jar（当前 %q）", kind)
+	}
+	target := filepath.Join(s.toolsDir(), name)
+	if _, err := os.Stat(target); err == nil && !overwrite {
+		return toolEntry{}, fmt.Errorf("已存在同名工具 %s（如需覆盖请确认后重试）", name)
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return toolEntry{}, err
+	}
+	if err := chmodToolFile(target, kind); err != nil {
+		return toolEntry{}, err
+	}
+	sum, err := toolFileSHA256(target)
+	if err != nil {
+		return toolEntry{}, err
+	}
+	e := toolEntry{Name: name, Source: "uploaded"}
+	overlayToolEntry(&e, want)
+	e.Path = name
+	e.Entry = ""
+	e.Kind = kind
+	if e.SHA256 == "" {
+		e.SHA256 = sum
+	}
+	return e, nil
+}
+
+// installToolZip 安装已落盘的 zip 包到 data/tools/<name>。
+func (s *Server) installToolZip(tmpName, name string, want toolEntry, overwrite bool) (toolEntry, error) {
+	zr, err := openToolZip(tmpName)
+	if err != nil {
+		return toolEntry{}, err
+	}
+	defer zr.Close()
+
+	meta, err := readToolZipMeta(&zr.Reader)
+	if err != nil {
+		return toolEntry{}, err
+	}
+
+	stage, err := os.MkdirTemp(s.toolsDir(), ".extract-*")
+	if err != nil {
+		return toolEntry{}, err
+	}
+	defer os.RemoveAll(stage) // 落地成功后 stage 里的内容已被 rename 走
+	files, err := extractToolZip(&zr.Reader, stage)
+	if err != nil {
+		return toolEntry{}, err
+	}
+
+	// 打包整目录时（fscan.zip 里是 fscan/fscan）去掉共同的一级目录，直接把那一层
+	// rename 成安装目录：往父目录里 rename 同名目录在多数平台会失败，所以不动父目录。
+	src := stage
+	if top, ok := stripCommonTopDir(files); ok {
+		src = filepath.Join(stage, top)
+		stripped := make([]string, 0, len(files))
+		for _, f := range files {
+			stripped = append(stripped, strings.TrimPrefix(f, top+"/"))
+		}
+		files = stripped
+	}
+
+	// 元数据：包内声明 > 调用方覆盖。
+	e := toolEntry{Name: name, Source: "uploaded"}
+	if meta != nil {
+		e = *meta
+		e.Name = name
+		if e.Source == "" {
+			e.Source = "uploaded"
+		}
+	}
+	overlayToolEntry(&e, want)
+
+	entry, err := resolveZipLayout(e, files)
+	if err != nil {
+		return toolEntry{}, err
+	}
+
+	target := filepath.Join(s.toolsDir(), name)
+	if err := swapDir(src, target, overwrite); err != nil {
+		return toolEntry{}, fmt.Errorf("安装失败：%w", err)
+	}
+	if entry.Kind != "dir" {
+		// 单文件包：原生可执行文件补执行位（脚本/JAR 交给解释器，不必可执行），并钉摘要。
+		abs := filepath.Join(s.toolsDir(), filepath.FromSlash(entry.Path))
+		_ = chmodToolFile(abs, entry.Kind)
+		if sum, herr := toolFileSHA256(abs); herr == nil {
+			entry.SHA256 = sum
+		}
+	}
+	return entry, nil
+}
+
+// ---------- 上传接口 ----------
+
+// tlUpload 安装一个工具，并立即注册成可调用的工具行。
+func (s *Server) tlUpload(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxToolUploadBytes+1<<20)
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeErr(w, 400, "缺少上传文件(表单字段 file)或超出大小限制")
+		return
+	}
+	defer file.Close()
+
+	dir := s.toolsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	// 先落到同目录的临时文件：后面按磁盘路径解析 zip / 计算摘要，也保证 rename 是同盘操作。
+	tmp, err := os.CreateTemp(dir, ".upload-*")
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := io.Copy(tmp, file); err != nil {
+		tmp.Close()
+		writeErr(w, 400, "读取上传内容失败："+err.Error())
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		base := path.Base(filepath.ToSlash(hdr.Filename))
+		name = strings.TrimSuffix(base, path.Ext(base))
+	}
+	if msg := validToolName(name); msg != "" {
+		writeErr(w, 400, "工具名称无效："+msg)
+		return
+	}
+	if !validToolRuntime(r.FormValue("runtime")) {
+		writeErr(w, 400, fmt.Sprintf("不支持的 runtime %q（可用：python3/node/php/java，原生二进制留空）", r.FormValue("runtime")))
+		return
+	}
+	want := toolEntry{
+		Name: name, Source: "uploaded",
+		Kind:    strings.ToLower(strings.TrimSpace(r.FormValue("kind"))),
+		Runtime: r.FormValue("runtime"), Entry: r.FormValue("entry"),
+		Purpose: r.FormValue("purpose"), Version: r.FormValue("version"),
+		Agents: splitAgents(r.FormValue("agents")),
+	}
+	overwrite := r.URL.Query().Get("overwrite") == "true"
+
+	var entry toolEntry
+	if isZipFile(tmpName) {
+		entry, err = s.installToolZip(tmpName, name, want, overwrite)
+	} else {
+		entry, err = s.installToolFile(tmpName, name, want, overwrite)
+	}
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+
+	m, err := s.loadToolManifest()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if err := appendOrReplaceEntry(m, entry); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err := s.saveToolManifest(m); err != nil {
+		writeErr(w, 500, "写入工具清单失败："+err.Error())
+		return
+	}
+
+	// 上传即注册：清单条目的 agents/enabled 优先，缺省绑全部 agent（见 toolEntryToRow）。
+	row, err := s.toolEntryToRow(entry, s.allAgentKeys())
+	if err != nil {
+		writeErr(w, 500, "清单已写入，但注册工具失败："+err.Error())
+		return
+	}
+	created, err := pg.UpsertLibraryTool(row, entry.overwriteBinding())
+	if err != nil {
+		writeErr(w, 500, "清单已写入，但注册工具失败："+err.Error())
+		return
+	}
+	s.invalidateCommandTemplates()
+	writeJSON(w, 201, map[string]any{
+		"name": entry.Name, "key": row.Key, "path": entry.Path, "kind": entry.Kind,
+		"runtime": entry.Runtime, "entry": entry.Entry, "created": created,
+	})
 }

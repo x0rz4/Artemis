@@ -95,7 +95,8 @@ func (s *Server) toolCreateSkill() actool.CoreTool {
 			if strings.TrimSpace(a.Description) == "" {
 				return actool.Errorf("description 必填"), nil
 			}
-			path := filepath.Join(s.skillDir, a.Name)
+			// 新建落到写入根（data/skills/uploaded），程序目录里的内置技能集不受影响。
+			path := filepath.Join(s.skillWriteRoot(), a.Name)
 			if _, err := os.Stat(path); err == nil {
 				return actool.Errorf("skill 已存在: " + a.Name), nil
 			}
@@ -134,7 +135,7 @@ func (s *Server) toolUpdateSkillFile() actool.CoreTool {
 			if !validSkillName(a.Name) {
 				return actool.Errorf("skill 名不合法"), nil
 			}
-			skillPath := filepath.Join(s.skillDir, a.Name)
+			skillPath := s.skillPath(a.Name)
 			if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 				return actool.Errorf("skill 不存在: " + a.Name), nil
 			}

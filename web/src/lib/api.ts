@@ -57,6 +57,10 @@ import type {
   LLMRecordDetail,
   LLMRecordItem,
   LLMRetryOverride,
+  LibSource,
+  LibSourceInfo,
+  LibSyncResult,
+  LibSyncItem,
   LLMRetryPolicy,
   LLMTask,
   MCPServer,
@@ -95,6 +99,7 @@ import type {
   ToolLib,
   ToolLibImportResult,
   ToolLibSummary,
+  SkillSourceState,
   ToolStat,
   TrafficDetail,
   TrafficEvidenceRef,
@@ -1109,6 +1114,20 @@ export const api = {
   },
   deleteToolLibEntry: (name: string, purge = false) =>
     del<{ deleted: string; key?: string }>(`/tool-lib/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`),
+  // 多源同步：源清单里是「清单 + 资产」，令牌存后端 settings，前端只看到 has_token。
+  toolLibSources: () => get<{ sources: LibSourceInfo[] }>("/tool-lib/sources").then((r) => arr(r.sources)),
+  saveToolLibSource: (body: { source: LibSource; token?: string; clear_token?: boolean }) =>
+    put<{ ok: boolean; has_token: boolean }>("/tool-lib/sources", body),
+  deleteToolLibSource: (name: string) => del<{ deleted: string }>(`/tool-lib/sources/${encodeURIComponent(name)}`),
+  toolLibSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) => post<LibSyncResult>("/tool-lib/sync", body),
+
+  // ---- 技能库来源（git 整仓 / github·http 的 zip 清单）----
+  skillSources: () => get<SkillSourceState>("/skills/sources"),
+  saveSkillSource: (body: { source: LibSource; token?: string; clear_token?: boolean }) =>
+    put<{ ok: boolean; has_token: boolean }>("/skills/sources", body),
+  deleteSkillSource: (name: string, purge = false) =>
+    del<{ deleted: string }>(`/skills/sources/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`),
+  skillSync: (body: { names?: string[]; dry_run?: boolean; force?: boolean }) => post<LibSyncResult>("/skills/sync", body),
 
   // ---- mcp ----
   mcpServers: () => get<{ servers: MCPServer[] }>("/mcp").then((r) => arr(r.servers)),

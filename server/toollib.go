@@ -37,17 +37,7 @@ const toolsLibComment = "运行时工具清单：data/tools 下的文件与本�
 	"在「系统 → 工具库」点「导入」把条目注册成 Agent 可调用的工具（kind=command）。" +
 	"kind: binary|script|jar|dir；runtime: python3|node|php|java|留空(原生二进制)。" +
 	"path 相对 data/tools（目录型工具用 entry 指定入口文件）。" +
-	"sources 预留给多源同步（github / http 静态源），当前不参与运行。"
-
-// toolSource 是清单里的一个同步源。P0 只解析与保留，拉取逻辑（github/http）留到 P1。
-type toolSource struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"` // github | http
-	Repo   string `json:"repo,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Branch string `json:"branch,omitempty"`
-	URL    string `json:"url,omitempty"`
-}
+	"sources 是多源同步配置（github / http 清单），同步只增改、不删本地条目。"
 
 // toolEntry 是清单里的一条工具。字段与 artex-ymh 的 packaging/tools-manifest.json 对齐，
 // 并补上本平台需要的注册信息（key/agents/enabled/deferred）。
@@ -59,31 +49,33 @@ type toolEntry struct {
 	Platform string          `json:"platform,omitempty"`
 	SHA256   string          `json:"sha256,omitempty"`
 	Path     string          `json:"path"`
+	URL      string          `json:"url,omitempty"` // 资产绝对地址（可选，覆盖源的资产根推导）
 	Kind     string          `json:"kind,omitempty"`    // binary | script | jar | dir
 	Runtime  string          `json:"runtime,omitempty"` // python3 | node | php | java | 空
 	Entry    string          `json:"entry,omitempty"`   // kind=dir 时的入口文件（相对 path）
 	Category string          `json:"category,omitempty"`
-	Source   string          `json:"source,omitempty"` // official | git:<name> | uploaded
+	Source   string          `json:"source,omitempty"` // official | <源名> | uploaded
 	Schema   json.RawMessage `json:"schema,omitempty"`
 	Agents   []string        `json:"agents,omitempty"`  // 缺省/空 = 全部 agent
 	Enabled  *bool           `json:"enabled,omitempty"` // 缺省 = true
 	Deferred bool            `json:"deferred,omitempty"`
 }
 
-// toolManifest 是 manifest.json 的整体结构。
+// toolManifest 是 manifest.json 的整体结构。sources 由 synclib.go 的 libSource 承载
+// （工具库与技能库共用一套源模型）。
 type toolManifest struct {
-	Comment   string       `json:"_comment,omitempty"`
-	Version   string       `json:"version"`
-	UpdatedAt string       `json:"updated_at,omitempty"`
-	Sources   []toolSource `json:"sources"`
-	Tools     []toolEntry  `json:"tools"`
+	Comment   string      `json:"_comment,omitempty"`
+	Version   string      `json:"version"`
+	UpdatedAt string      `json:"updated_at,omitempty"`
+	Sources   []libSource `json:"sources"`
+	Tools     []toolEntry `json:"tools"`
 }
 
 func emptyToolManifest() *toolManifest {
 	return &toolManifest{
 		Comment: toolsLibComment,
 		Version: toolsLibVersion,
-		Sources: []toolSource{},
+		Sources: []libSource{},
 		Tools:   []toolEntry{},
 	}
 }

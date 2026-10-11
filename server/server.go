@@ -226,7 +226,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			}
 			return a.TaskTimeoutWrapupMaxTurns, true
 		}
-		wireAgentAugment(m.pg, s.skillDir, s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
+		wireAgentAugment(m.pg, s.skillRoots(), s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
 		domainReg := buildDomainReg(m.Assets())
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
@@ -267,6 +267,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	s.wireCommandRenderer()   // 自定义 command 工具在审计/规则匹配里的真实命令行
 	s.ensureToolLib()         // data/tools 清单骨架 + 启动自检（只告警，不阻断）
+	s.ensureSkillLib()        // data/skills 上传目录 + 清单骨架（只告警，不阻断）
 	return s
 }
 
@@ -895,6 +896,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tool-lib/import", s.tlImport)
 	mux.HandleFunc("POST /api/tool-lib/upload", s.tlUpload)
 	mux.HandleFunc("DELETE /api/tool-lib/{name}", s.tlDelete)
+	// 工具库多源同步（github / http 清单，令牌存 settings）
+	mux.HandleFunc("GET /api/tool-lib/sources", s.tlSources)
+	mux.HandleFunc("PUT /api/tool-lib/sources", s.tlSaveSource)
+	mux.HandleFunc("DELETE /api/tool-lib/sources/{name}", s.tlDeleteSource)
+	mux.HandleFunc("POST /api/tool-lib/sync", s.tlSync)
 	// MCP CRUD
 	mux.HandleFunc("GET /api/mcp", s.pgListMCP)
 	mux.HandleFunc("POST /api/mcp", s.pgSaveMCP)
@@ -912,6 +918,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/skills", s.fsCreateSkill)
 	mux.HandleFunc("POST /api/skills/upload", s.fsUploadSkill)
 	mux.HandleFunc("DELETE /api/skills/{name}", s.fsDeleteSkill)
+	mux.HandleFunc("GET /api/skills/sources", s.skSources) // 技能库的同步源与扫描根
+	mux.HandleFunc("PUT /api/skills/sources", s.skSaveSource)
+	mux.HandleFunc("DELETE /api/skills/sources/{name}", s.skDeleteSource)
+	mux.HandleFunc("POST /api/skills/sync", s.skSync)
 	mux.HandleFunc("GET /api/skills/missing", s.fsMissingSkills)   // 未命中(想调但不存在)的 skill 名
 	mux.HandleFunc("GET /api/skills/{name}/usage", s.fsSkillUsage) // 单个 skill 的最近调用
 	mux.HandleFunc("PUT /api/skills/{name}/meta", s.fsUpdateSkillMeta)

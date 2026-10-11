@@ -972,26 +972,21 @@ type skillFileNode struct {
 	LastUsed *time.Time `json:"last_used,omitempty"`
 }
 
+// fsListSkills 列出全部扫描根里的 skill（内置 + 上传 + git 同步），同名以靠前的根为准。
+// 目录里没有可解析 SKILL.md 的 skill 也会列出来（描述为空），方便用户发现并清理坏目录。
 func (s *Server) fsListSkills(w http.ResponseWriter, r *http.Request) {
-	_ = os.MkdirAll(s.skillDir, 0o755)
-	allReg, _ := skill.LoadDir(s.skillDir)
-	metaByDir := map[string]skill.Skill{}
-	if allReg != nil {
-		for _, sk := range allReg.List() {
-			if sk.Dir != "" {
-				metaByDir[filepath.Base(sk.Dir)] = sk
-			}
-		}
+	if s.skillDir != "" {
+		_ = os.MkdirAll(s.skillDir, 0o755)
 	}
-	entries, err := os.ReadDir(s.skillDir)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
+	if write := s.skillWriteRoot(); write != "" {
+		_ = os.MkdirAll(write, 0o755)
 	}
+	roots := s.skillRoots()
+	metaByDir := loadAllSkills(roots)
 	// Usage is best-effort decoration: a ledger read failure leaves the counts at
 	// zero rather than failing the skill list itself.
 	statBySkill := map[string]db.SkillStat{}
-	if s.m.pg != nil {
+	if s.m != nil && s.m.pg != nil {
 		stats, err := s.m.pg.SkillStats()
 		if err != nil {
 			log.Printf("[skills] 读取调用统计失败: %v", err)
@@ -1001,26 +996,37 @@ func (s *Server) fsListSkills(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	nodes := []skillFileNode{}
-	for _, e := range entries {
-		if !e.IsDir() {
+	seen := map[string]bool{}
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
 			continue
 		}
-		dirName := e.Name()
-		node := skillFileNode{Name: dirName, Agents: []string{}}
-		if st, ok := statBySkill[dirName]; ok {
-			node.Calls, node.Tasks, node.Agents, node.LastUsed = st.Calls, st.Tasks, st.Agents, st.LastUsed
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			dirName := e.Name()
+			if seen[dirName] {
+				continue // 靠前的根优先
+			}
+			seen[dirName] = true
+			node := skillFileNode{Name: dirName, Agents: []string{}}
+			if st, ok := statBySkill[dirName]; ok {
+				node.Calls, node.Tasks, node.Agents, node.LastUsed = st.Calls, st.Tasks, st.Agents, st.LastUsed
+			}
+			if meta, ok := metaByDir[dirName]; ok {
+				node.Description = meta.Description
+				node.License = meta.License
+				node.Compatibility = meta.Compatibility
+				node.MCPs = meta.MCPs
+			}
+			node.Files, _ = walkSkillFiles(filepath.Join(root, dirName))
+			if node.Files == nil {
+				node.Files = []string{}
+			}
+			nodes = append(nodes, node)
 		}
-		if meta, ok := metaByDir[dirName]; ok {
-			node.Description = meta.Description
-			node.License = meta.License
-			node.Compatibility = meta.Compatibility
-			node.MCPs = meta.MCPs
-		}
-		node.Files, _ = walkSkillFiles(filepath.Join(s.skillDir, dirName))
-		if node.Files == nil {
-			node.Files = []string{}
-		}
-		nodes = append(nodes, node)
 	}
 	writeJSON(w, 200, map[string]any{"skills": nodes})
 }
@@ -1093,7 +1099,7 @@ func (s *Server) fsCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "description is required")
 		return
 	}
-	skillPath := filepath.Join(s.skillDir, body.Name)
+	skillPath := filepath.Join(s.skillWriteRoot(), body.Name)
 	if _, err := os.Stat(skillPath); err == nil {
 		writeErr(w, 409, "skill already exists")
 		return
@@ -1158,7 +1164,7 @@ func (s *Server) fsUpdateSkillMeta(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	skillMD := filepath.Join(s.skillDir, name, "SKILL.md")
+	skillMD := filepath.Join(s.skillPath(name), "SKILL.md")
 	raw, err := os.ReadFile(skillMD)
 	if err != nil {
 		writeErr(w, 404, "skill not found")
@@ -1283,12 +1289,9 @@ func skillNameFromFrontmatter(md []byte) string {
 	return ""
 }
 
-// fsUploadSkill installs a skill from an uploaded .zip. The archive must contain a
-// SKILL.md (at the root or under a single top-level dir); the skill name is taken
-// from that file's `name:` frontmatter (falling back to the top dir / zip name).
-// Zip-slip is defeated by validating every entry path with skillRelPath, and a set
-// of size/count caps guard against zip bombs. POST ?overwrite=true replaces an
-// existing skill of the same name.
+// fsUploadSkill installs a skill from an uploaded .zip. POST ?overwrite=true replaces
+// an existing skill of the same name. 解压与落盘逻辑在 installSkillZipBytes，技能库同步
+// 复用同一条路径。
 func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSkillZipBytes)
 	file, hdr, err := r.FormFile("file")
@@ -1302,16 +1305,35 @@ func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	base := path.Base(filepath.ToSlash(hdr.Filename))
+	fallback := strings.TrimSuffix(base, path.Ext(base))
+	name, files, code, err := s.installSkillZipBytes(buf, fallback, r.URL.Query().Get("overwrite") == "true")
+	if err != nil {
+		if code == 0 {
+			code = 500
+		}
+		writeErr(w, code, err.Error())
+		return
+	}
+	writeJSON(w, 201, map[string]any{"name": name, "files": files})
+}
+
+// installSkillZipBytes 从内存里的 zip 安装一个 skill，返回 (skill 名, 文件数, 建议状态码, 错误)。
+//
+// The archive must contain a SKILL.md (at the root or under a single top-level dir);
+// the skill name is taken from that file's `name:` frontmatter (falling back to the
+// top dir, then fallbackName). Zip-slip is defeated by validating every entry path
+// with skillRelPath, and size/count caps guard against zip bombs. 落盘走 swapDir：
+// 覆盖失败时可以退回原来的 skill，不至于把用户能用的 skill 弄丢。
+func (s *Server) installSkillZipBytes(buf []byte, fallbackName string, overwrite bool) (string, int, int, error) {
 	zr, err := newSkillZipReader(buf)
 	if err != nil {
-		writeErr(w, 400, err.Error())
-		return
+		return "", 0, 400, err
 	}
 	// entries carry UTF-8-decoded names (GBK 包也能读) and exclude archiver junk.
 	entriesAll := skillZipEntries(zr)
 	if err := checkSkillZipMethods(entriesAll); err != nil {
-		writeErr(w, 400, err.Error())
-		return
+		return "", 0, 400, err
 	}
 
 	// locate the shallowest SKILL.md → its directory is the skill root inside the zip.
@@ -1326,8 +1348,7 @@ func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if skillMD == nil {
-		writeErr(w, 400, "压缩包内未找到 SKILL.md")
-		return
+		return "", 0, 400, errors.New("压缩包内未找到 SKILL.md")
 	}
 	root := path.Dir(skillMD.name) // "." when SKILL.md is at the zip root
 	prefix := ""
@@ -1338,37 +1359,35 @@ func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 	// derive + validate the skill name from the SKILL.md frontmatter.
 	md, err := readZipEntry(skillMD.f)
 	if err != nil {
-		writeErr(w, 400, "读取 SKILL.md 失败："+err.Error())
-		return
+		return "", 0, 400, fmt.Errorf("读取 SKILL.md 失败：%w", err)
 	}
 	name := skillNameFromFrontmatter(md)
 	if name == "" && prefix != "" {
 		name = path.Base(strings.TrimSuffix(prefix, "/"))
 	}
 	if name == "" {
-		base := path.Base(filepath.ToSlash(hdr.Filename))
-		name = strings.TrimSuffix(base, path.Ext(base))
+		// 调用方给的兜底名（上传时的 zip 文件名、同步时的源条目名）已经去过扩展名。
+		name = strings.TrimSpace(fallbackName)
 	}
 	if !validSkillName(name) {
-		writeErr(w, 400, "skill 名称无效（取自 SKILL.md 的 name 字段）："+name+
-			"（≤64 字符，字母开头，只能用小写字母/数字/连字符或中文等非 ASCII 字母，不能有空格、点、路径分隔符）")
-		return
+		return name, 0, 400, fmt.Errorf("skill 名称无效（取自 SKILL.md 的 name 字段）：%s"+
+			"（≤64 字符，字母开头，只能用小写字母/数字/连字符或中文等非 ASCII 字母，不能有空格、点、路径分隔符）", name)
 	}
 
-	skillPath := filepath.Join(s.skillDir, name)
-	overwrite := r.URL.Query().Get("overwrite") == "true"
+	dir := s.skillWriteRoot()
+	skillPath := filepath.Join(dir, name)
 	if _, err := os.Stat(skillPath); err == nil && !overwrite {
-		writeErr(w, 409, "skill 已存在："+name+"（如需覆盖请确认后重试）")
-		return
+		return name, 0, 409, errors.New("skill 已存在：" + name + "（如需覆盖请确认后重试）")
 	}
 
 	// extract into a temp dir first, then atomically swap in — a bad entry aborts
 	// the whole upload without leaving a half-written skill.
-	_ = os.MkdirAll(s.skillDir, 0o755)
-	tmp, err := os.MkdirTemp(s.skillDir, ".upload-*")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return name, 0, 500, err
+	}
+	tmp, err := os.MkdirTemp(dir, ".upload-*")
 	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
+		return name, 0, 500, err
 	}
 	defer os.RemoveAll(tmp) // no-op after a successful rename
 
@@ -1386,59 +1405,46 @@ func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 		}
 		clean, msg := skillRelPath(rel)
 		if msg != "" {
-			writeErr(w, 400, "压缩包含非法路径 "+e.name+"："+msg)
-			return
+			return name, 0, 400, fmt.Errorf("压缩包含非法路径 %s：%s", e.name, msg)
 		}
 		if entries++; entries > maxSkillEntries {
-			writeErr(w, 400, "压缩包文件过多")
-			return
+			return name, 0, 400, errors.New("压缩包文件过多")
 		}
 		if f.UncompressedSize64 > maxSkillFileBytes {
-			writeErr(w, 400, "文件过大："+rel)
-			return
+			return name, 0, 400, fmt.Errorf("文件过大：%s", rel)
 		}
 		dst := filepath.Join(tmp, clean)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			writeErr(w, 500, err.Error())
-			return
+			return name, 0, 500, err
 		}
 		rc, err := f.Open()
 		if err != nil {
-			writeErr(w, 500, err.Error())
-			return
+			return name, 0, 500, err
 		}
 		out, err := os.Create(dst)
 		if err != nil {
 			rc.Close()
-			writeErr(w, 500, err.Error())
-			return
+			return name, 0, 500, err
 		}
 		n, err := io.Copy(out, io.LimitReader(rc, maxSkillFileBytes+1))
 		out.Close()
 		rc.Close()
 		if err != nil {
-			writeErr(w, 500, err.Error())
-			return
+			return name, 0, 500, err
 		}
 		total += n
 		if total > maxSkillTotalBytes {
-			writeErr(w, 400, "压缩包解压后过大")
-			return
+			return name, 0, 400, errors.New("压缩包解压后过大")
 		}
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "SKILL.md")); err != nil {
-		writeErr(w, 400, "解压后缺少 SKILL.md")
-		return
+		return name, entries, 400, errors.New("解压后缺少 SKILL.md")
 	}
 
-	if overwrite {
-		_ = os.RemoveAll(skillPath)
+	if err := swapDir(tmp, skillPath, overwrite); err != nil {
+		return name, entries, 500, fmt.Errorf("安装失败：%w", err)
 	}
-	if err := os.Rename(tmp, skillPath); err != nil {
-		writeErr(w, 500, "安装失败："+err.Error())
-		return
-	}
-	writeJSON(w, 201, map[string]any{"name": name, "files": entries})
+	return name, entries, 0, nil
 }
 
 // readZipEntry reads a single entry's bytes (capped). Takes the *zip.File rather than
@@ -1466,7 +1472,7 @@ func (s *Server) fsDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if err := os.RemoveAll(filepath.Join(s.skillDir, name)); err != nil {
+	if err := os.RemoveAll(s.skillPath(name)); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
@@ -1571,7 +1577,7 @@ func (s *Server) fsListFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid skill name")
 		return
 	}
-	dirPath := filepath.Join(s.skillDir, name)
+	dirPath := s.skillPath(name)
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
 		writeErr(w, 404, "skill not found")
 		return
@@ -1598,7 +1604,7 @@ func (s *Server) fsReadFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errMsg)
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(s.skillDir, name, file))
+	data, err := os.ReadFile(filepath.Join(s.skillPath(name), file))
 	if os.IsNotExist(err) {
 		writeErr(w, 404, "file not found")
 		return
@@ -1628,7 +1634,7 @@ func (s *Server) fsWriteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	skillPath := filepath.Join(s.skillDir, name)
+	skillPath := s.skillPath(name)
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		writeErr(w, 404, "skill not found")
 		return
@@ -1664,7 +1670,7 @@ func (s *Server) fsCreateDir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errMsg)
 		return
 	}
-	skillPath := filepath.Join(s.skillDir, name)
+	skillPath := s.skillPath(name)
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		writeErr(w, 404, "skill not found")
 		return
@@ -1687,7 +1693,7 @@ func (s *Server) fsDeletePath(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errMsg)
 		return
 	}
-	fullPath := filepath.Join(s.skillDir, name, file)
+	fullPath := filepath.Join(s.skillPath(name), file)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		writeErr(w, 404, "not found")
 		return

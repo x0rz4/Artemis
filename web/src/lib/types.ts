@@ -1309,6 +1309,54 @@ export interface ToolLibImportResult {
   results: { name: string; key?: string; created: boolean; error?: string }[];
 }
 
+// ---- 库源（工具库与技能库共用一套源模型）----
+export interface LibSource {
+  name: string;
+  type: "github" | "http" | "git" | string;
+  repo?: string;
+  branch?: string;
+  path?: string;
+  url?: string;
+  asset_base?: string;
+  allow_unpinned?: boolean;
+}
+
+export interface LibSourceInfo extends LibSource {
+  manifest_url?: string;
+  target_dir?: string;
+  config_error?: string;
+  last_sync_at?: string;
+  last_error?: string;
+  has_token: boolean;
+}
+
+export interface LibSyncItem {
+  source: string;
+  name: string;
+  action: "add" | "update" | "keep" | "failed";
+  reason?: string;
+  local_version?: string;
+  remote_version?: string;
+  path?: string;
+  error?: string;
+  from_revision?: string;
+  to_revision?: string;
+}
+
+export interface LibSyncResult {
+  dry_run: boolean;
+  sources: string[];
+  items: LibSyncItem[];
+  changed: number;
+  failed: number;
+}
+
+export interface SkillSourceState {
+  roots: string[];
+  sources: LibSourceInfo[];
+  skills: { name: string; source: string; dir?: string; revision?: string; synced_at?: string }[];
+}
+
 // ---- Stats ----
 export interface Stats {
   assets: number;

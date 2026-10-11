@@ -4,7 +4,9 @@ import * as React from "react";
 
 import {
   CheckCircle2Icon,
+  CloudDownloadIcon,
   FolderOpenIcon,
+  PlusIcon,
   RefreshCwIcon,
   Trash2Icon,
   TriangleAlertIcon,
@@ -15,12 +17,13 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import type { ToolLib, ToolLibCheck } from "@/lib/types";
+import type { LibSourceInfo, LibSyncItem, ToolLib, ToolLibCheck } from "@/lib/types";
 
 /** kind/runtime 的下拉用哨兵值表示"不指定"，提交前换回空串。 */
 const KIND_AUTO = "auto";
@@ -43,6 +46,42 @@ const emptyForm: UploadForm = {
   entry: "",
   purpose: "",
 };
+
+/** 源的编辑表单。令牌只进不出：后端只回 has_token，改的时候要重新填。 */
+type SourceForm = {
+  name: string;
+  type: string;
+  repo: string;
+  branch: string;
+  path: string;
+  url: string;
+  token: string;
+  allow_unpinned: boolean;
+};
+
+const emptySource: SourceForm = {
+  name: "",
+  type: "github",
+  repo: "",
+  branch: "main",
+  path: "manifest.json",
+  url: "",
+  token: "",
+  allow_unpinned: false,
+};
+
+function actionBadge(action: LibSyncItem["action"]) {
+  switch (action) {
+    case "add":
+      return <Badge>新增</Badge>;
+    case "update":
+      return <Badge variant="secondary">更新</Badge>;
+    case "keep":
+      return <Badge variant="outline">已最新</Badge>;
+    default:
+      return <Badge variant="destructive">失败</Badge>;
+  }
+}
 
 /** 完整性状态 → 徽标。unpinned 是"能跑但不校验"，用中性色避免误导。 */
 function ShaBadge({ check }: { check: ToolLibCheck }) {
@@ -88,6 +127,9 @@ export default function ToolLibPage() {
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [form, setForm] = React.useState<UploadForm>(emptyForm);
+  const [sources, setSources] = React.useState<LibSourceInfo[]>([]);
+  const [src, setSrc] = React.useState<SourceForm>(emptySource);
+  const [syncItems, setSyncItems] = React.useState<LibSyncItem[]>([]);
 
   const load = React.useCallback(
     (quiet = false) => {
@@ -97,6 +139,10 @@ export default function ToolLibPage() {
         .then(setLib)
         .catch((e) => toast.error("读取工具库失败：" + (e as Error).message))
         .finally(() => setLoading(false));
+      api
+        .toolLibSources()
+        .then(setSources)
+        .catch(() => {});
     },
     [],
   );
@@ -107,6 +153,67 @@ export default function ToolLibPage() {
 
   function setF(patch: Partial<UploadForm>) {
     setForm((f) => ({ ...f, ...patch }));
+  }
+
+  function setS(patch: Partial<SourceForm>) {
+    setSrc((s) => ({ ...s, ...patch }));
+  }
+
+  function saveSource() {
+    if (!src.name.trim()) {
+      toast.error("请先填源名（小写字母/数字/短横线）");
+      return;
+    }
+    setBusy(true);
+    api
+      .saveToolLibSource({
+        source: {
+          name: src.name.trim(),
+          type: src.type,
+          repo: src.repo.trim(),
+          branch: src.branch.trim(),
+          path: src.path.trim(),
+          url: src.url.trim(),
+          allow_unpinned: src.allow_unpinned,
+        },
+        token: src.token.trim() || undefined,
+      })
+      .then(() => {
+        toast.success(`源 ${src.name} 已保存`);
+        setSrc(emptySource);
+        load(true);
+      })
+      .catch((e) => toast.error("保存失败：" + (e as Error).message))
+      .finally(() => setBusy(false));
+  }
+
+  function removeSource(name: string) {
+    if (!window.confirm(`移除源 ${name}？\n\n已同步下来的工具与本地清单条目都会保留。`)) return;
+    setBusy(true);
+    api
+      .deleteToolLibSource(name)
+      .then(() => {
+        toast.success(`已移除源 ${name}`);
+        load(true);
+      })
+      .catch((e) => toast.error("移除失败：" + (e as Error).message))
+      .finally(() => setBusy(false));
+  }
+
+  // dryRun 只回计划：先看清哪些条目会动，再决定要不要真同步。
+  function runSync(dryRun: boolean) {
+    setBusy(true);
+    api
+      .toolLibSync({ dry_run: dryRun })
+      .then((r) => {
+        setSyncItems(r.items);
+        const head = dryRun ? "预览" : "同步";
+        if (r.failed) toast.warning(`${head}完成：变更 ${r.changed}，失败 ${r.failed}`);
+        else toast.success(`${head}完成：变更 ${r.changed} 条`);
+        if (!dryRun) load(true);
+      })
+      .catch((e) => toast.error("同步失败：" + (e as Error).message))
+      .finally(() => setBusy(false));
   }
 
   function doCheck() {
@@ -317,6 +424,140 @@ export default function ToolLibPage() {
             <UploadIcon className="size-4" />
             上传并注册
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CloudDownloadIcon className="size-4" />
+            来源与同步
+          </CardTitle>
+          <CardDescription>
+            github 型读仓库里的清单文件，http 型读任意静态清单；同步只增改条目，本地独有的工具不会被抹掉。令牌存在服务端设置里，页面只显示是否已配置。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {sources.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>源</TableHead>
+                  <TableHead>类型</TableHead>
+                  <TableHead>位置</TableHead>
+                  <TableHead>令牌</TableHead>
+                  <TableHead>上次同步</TableHead>
+                  <TableHead className="w-16" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sources.map((s) => (
+                  <TableRow key={s.name}>
+                    <TableCell className="font-medium">{s.name}</TableCell>
+                    <TableCell className="text-xs">{s.type}</TableCell>
+                    <TableCell className="max-w-[22rem] truncate font-mono text-xs" title={s.manifest_url}>
+                      {s.config_error ? <span className="text-destructive">{s.config_error}</span> : s.manifest_url}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {s.has_token ? <Badge variant="secondary">已配置</Badge> : <span className="text-muted-foreground">匿名</span>}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {s.last_error ? (
+                        <span className="text-destructive">{s.last_error}</span>
+                      ) : (
+                        <span className="text-muted-foreground">{s.last_sync_at || "未同步"}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="sm" onClick={() => removeSource(s.name)} disabled={busy}>
+                        <Trash2Icon className="size-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="src-name">源名</Label>
+              <Input id="src-name" value={src.name} onChange={(e) => setS({ name: e.target.value })} placeholder="official" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>类型</Label>
+              <Select value={src.type} onValueChange={(v) => setS({ type: v })}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="github">github</SelectItem>
+                  <SelectItem value="http">http</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="src-repo">仓库 owner/repo（github）</Label>
+              <Input id="src-repo" value={src.repo} onChange={(e) => setS({ repo: e.target.value })} placeholder="org/artex-tools" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="src-branch">分支</Label>
+              <Input id="src-branch" value={src.branch} onChange={(e) => setS({ branch: e.target.value })} placeholder="main" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="src-path">清单路径（github）</Label>
+              <Input id="src-path" value={src.path} onChange={(e) => setS({ path: e.target.value })} placeholder="manifest.json" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="src-url">清单 URL（http）</Label>
+              <Input id="src-url" value={src.url} onChange={(e) => setS({ url: e.target.value })} placeholder="https://dl.example.com/tools/manifest.json" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="src-token">访问令牌（可选，留空不改）</Label>
+              <Input
+                id="src-token"
+                type="password"
+                value={src.token}
+                onChange={(e) => setS({ token: e.target.value })}
+                placeholder="私有源只读令牌"
+              />
+            </div>
+            <label className="flex items-center gap-2 self-end pb-2 text-sm">
+              <Checkbox checked={src.allow_unpinned} onCheckedChange={(v) => setS({ allow_unpinned: v === true })} />
+              允许未钉 sha256 的条目
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={saveSource} disabled={busy}>
+              <PlusIcon className="size-4" />
+              保存源
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runSync(true)} disabled={busy || !sources.length}>
+              预览变更
+            </Button>
+            <Button size="sm" onClick={() => runSync(false)} disabled={busy || !sources.length}>
+              <CloudDownloadIcon className="size-4" />
+              同步全部源
+            </Button>
+          </div>
+
+          {syncItems.length > 0 && (
+            <div className="max-h-64 space-y-1 overflow-auto rounded-md border p-2">
+              {syncItems.map((it, i) => (
+                <div key={`${it.source}-${it.name}-${i}`} className="flex items-start gap-2 text-xs">
+                  {actionBadge(it.action)}
+                  <span className="font-mono">
+                    {it.source}/{it.name}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {it.error || it.reason || ""}
+                    {it.local_version || it.remote_version ? ` （${it.local_version || "-"} → ${it.remote_version || "-"}）` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

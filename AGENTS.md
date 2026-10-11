@@ -27,7 +27,9 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品名 **Artemis**（可执�
 | 工具定义与绑定 | `agent/toolcatalog.go`、`agent/tools*.go`、`server/orchestration.go` |
 | 发布与更新 | `build.sh`、`scripts/package-release.ps1`、`.github/workflows/release.yml`、`selfupdate/github.go`（`Repo` 占位值） |
 | 产品命名 | 品牌串只在 `web/src/config/app-config.ts`、登录/初始化页、侧边栏、`cmd/artex/main.go` 的 banner 与日志；二进制与包名在 `build.bat`、`build.sh`、`start.bat`、`start.sh`、`Dockerfile`、`scripts/package-release.ps1` |
-| 工具库 | `server/toollib.go`（清单与导入）、`server/toollib_upload.go`（上传）、`server/toollib_check.go`（自检）、`server/toollib_command.go`（审计用命令渲染）、`web/src/app/(main)/system/tool-lib/page.tsx` |
+| 工具库 | `server/toollib.go`（清单与导入）、`server/toollib_upload.go`（上传/安装器）、`server/toollib_check.go`（自检）、`server/toollib_command.go`（审计用命令渲染）、`server/toollib_sync.go`（多源同步）、`web/src/app/(main)/system/tool-lib/page.tsx` |
+| 库源同步底座 | `server/synclib.go`（按源派生白名单、令牌、下载校验原子落盘）——工具库与技能库共用，新增源类型只改这里 |
+| 技能库 | `server/skillsrc.go`（多扫描根 + 源同步）、`server/server_mgmt.go` 的 `fs*Skill*`、`web/src/app/(main)/system/skills/_components/skill-sources.tsx` |
 
 提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`。
 
@@ -41,6 +43,17 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品名 **Artemis**（可执�
 - **清单条目不写 agents 时默认绑全部 agent**：没有任何绑定的自定义工具对每个 agent 都不可见（见 `server/assembly.go` 的 `ToolResolve`）。
 - **审计可见性**：自定义 command 工具以自身 key 被调用，guard 从输入里读不到命令行，靠 `intercept.CommandRenderer`（`server/toollib_command.go` 接线）渲染出真实命令写进审计，并以 `_command` 合并进规则匹配的输入。新增模板型工具类型时别绕开这条链路。
 - 清单位于 `data/`（运行数据），不进发布包、不进 git；`manifest.json.bak` 是上一版备份。
+- **多源同步是并集**：本地独有的条目不会被源抹掉，源里删掉的条目也不删本地文件。同名条目按源刷新 version/sha256/path/kind/runtime/entry，**保留**本地的 key/agents/enabled/deferred（平台侧状态不是源能决定的）。
+- **落地顺序是文件先、清单后**：先原子替换文件再写清单，反过来会出现清单声称的版本在磁盘上不存在。覆盖安装走 `swapDir`（旧目录先改名，失败可退回）。
+- **摘要必须钉**：源条目 sha256 为空时默认拒绝安装，除非该源显式开启 `allow_unpinned`；未钉摘要/版本的条目每次同步都会重装。
+
+## 技能库（data/skills + 主 skills/）
+
+- 扫描根按优先级：程序旁的 `skills/`（内置，可用 `ARTEX_SKILL_DIR` 覆盖）→ `data/skills/uploaded`（上传与 zip 同步）→ `data/skills/git/<源名>`（git 型源整仓）。**同名以靠前的根为准**，内置不会被用户上传顶掉。
+- 写入落在该 skill 当前的根；**新建与上传默认进 `data/skills/uploaded`**，不污染程序目录。`s.skillPath(name)` 是唯一入口，不要在 handler 里手拼 `filepath.Join(s.skillDir, ...)`。
+- 源类型：`git`（`git clone --depth 1` / `fetch` + `reset --hard`，目录是远程镜像，本地改动会被覆盖，需要本机有 git）、`github`/`http`（拉一份 zip 清单，逐个下载校验后走 `installSkillZipBytes`）。
+- 令牌同样存 settings（`skill_source_token:<源名>`），不进 `data/skills/manifest.json`。
+- 侧边栏「工具库」页管工具，「Skill」页头部的同步控件管技能；两者共用 `synclib.go` 的白名单与校验口径。
 
 ## 验证与发布
 
