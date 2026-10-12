@@ -39,6 +39,6 @@
 
 `spec/` 是公开、可版本控制的项目文档；不要放入凭据、真实业务样本、个人路径或内部交接记录。根目录 `docs/` 已被忽略，本体系使用独立目录，不改变该忽略规则。
 
-## 待实施规划
+## 进行中的变更
 
-- [工具使用 Skill 维护](changes/tool-usage-skills/change.md)：独立 `Artemis-tools-skill` 仓库围绕锁文件中的八项工具维护使用指导，Registry 继续负责发布；当前为规划，尚未发布这八项 Skill。
+- [工具使用 Skill 维护](changes/tool-usage-skills/change.md)：独立 `Artemis-tools-skill` 仓库已编写八项工具指导与验证入口，Registry 接入、输出样本和定时发现继续实施；尚未发布这八项 Skill 的云更新包。

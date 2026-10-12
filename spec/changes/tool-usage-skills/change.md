@@ -1,12 +1,12 @@
 # tool-usage-skills：锁定工具的使用指导与 Skill 维护
 
-- 状态：draft
+- 状态：implementing
 - 类型：标准；后续 Registry 接入涉及发布校验，实施时按重点验证
 - 关联能力：[基线工具安装](../../specs/baseline-tool-install/spec.md)、[云更新](../../specs/cloud-library-updates/spec.md)
 
 ## 目标与范围
 
-用户明确要求独立建立 `x0rz4/Artemis-tools-skill`，主要指导 `tools-lock.json` 中工具的使用；`Artemis-registry` 继续负责发布。本次交付 Git 提交、独立仓库的规划文档和 GitHub 来源调查，不将规划中的 Skill 或同步自动化标记为已实现。
+用户明确要求独立建立 `x0rz4/Artemis-tools-skill`，主要指导 `tools-lock.json` 中工具的使用；`Artemis-registry` 继续负责发布。2026-10-12 用户进一步授权开始编写八份工具 Skill，本阶段实现八份正文、版本依据、必要参考和加载验证；Registry 源码导入、正式发布及定时发现继续作为后续阶段。
 
 当前八个工具已可安装，但三个既有 Skill（api-recon、playwright-cli、scopesentry）并未逐项覆盖这八个工具的调用。新仓库围绕使用条件、输入、参数、输出、错误处理与组合流程维护知识，首批不扩充二进制工具清单。
 
@@ -44,7 +44,7 @@
 
 ## 设计与影响
 
-完整维护方案、工具矩阵与候选来源放在新仓库的 `MAINTENANCE.md`、`catalog/tool-coverage.json`、`catalog/sources.json`。当前只初始化文档和调查记录；八份 Skill、检查脚本、定时搜索及 Registry 源码导入属于后续实施任务。
+完整维护方案、工具矩阵与候选来源放在新仓库的 `MAINTENANCE.md`、`catalog/tool-coverage.json`、`catalog/sources.json`。现已编写八份 Skill、各包独立的调用约定与固定源码参考，并增加文档/锁文件/帮助参数检查；定时搜索及 Registry 源码导入仍为后续任务。
 
 - 内容顺序：先完成八个单工具 Skill，再评估一个串联既有工具的流程 Skill。组合以实际前序结果驱动，不把所有工具无条件执行一遍。
 - 验证：固定版本 help/version、匿名离线输出样本、元数据解析、参数存在性、结构化输出语义；目标扫描不作为普通 CI 项。真实调用验收使用隔离本地靶场并单独记录。
@@ -53,11 +53,13 @@
 - 失败路径：网络失败保留上次来源快照；没有许可或固定提交只保留候选；版本不匹配阻止纳入发布。多个维护 PR 在合并前重新校验锁文件基准。
 - 迁移与恢复：不迁移现有 Skill。后续新增 Skill 通过 Registry 发布，恢复沿用现有快照与固定版本机制。
 
+实现核验发现当前 command `{args}` 模板对整段字符串统一 shell 引用，不拆分 argv。八份 Skill 均明确 CLI 示例不能直接装入这一薄封装，需要现场具名参数 schema 或后续执行器适配；不通过嵌套 shell 绕过边界。本阶段没有修改 command 执行语义。
+
 ## 任务
 
 - [x] 明确独立仓库分工和现有八项范围。
 - [x] GitHub 搜索官方工具与社区 Skill，记录初始候选和核查边界。
-- [ ] TUS-001：完成八份 Skill，核对加载、命名、版本和平台矩阵。
+- [x] TUS-001：完成八份 Skill，核对加载、命名、版本和平台矩阵。
 - [ ] TUS-002：核验参数、输出与故障路径，整理脱敏样本与验证记录。
 - [ ] TUS-003：实现来源、许可、锁文件漂移和内容检查；定时搜索只产出候选。
 - [ ] TUS-004：在 Registry 增加固定源码导入与发布验收，验证更新及回滚。
@@ -69,11 +71,20 @@
 | --- | --- | --- |
 | 工具范围 | 读取主仓库与 Registry 的 tools-lock.json | 八项名称、版本和平台一致；Registry 还维护许可证信息 |
 | 社区来源 | GitHub 搜索并读取 PAIPlugin 的 ffuf Skill、hack-skills 的 recon-and-methodology Skill 与仓库元数据 | 找到直接相关参考；记录固定提交和仓库许可，尚未完成逐文件许可与命令验证 |
-| 交付范围 | 文档和覆盖表标记为规划状态 | 未生成可发布 Skill，未改变稳定索引，未运行扫描 |
+| 首次规划范围 | 初始文档和覆盖表标记为 planned | 初始提交未编写 Skill；后续实施见下方记录 |
 | 文档检查 | 校验本次文档的 25 个本地链接、JSON、来源提交格式、版本和平台矩阵；两个仓库执行 `git diff --check` | 通过；八项均为 planned，七项支持 arm64，来源未复制 |
+
+### 八份 Skill 实施验证
+
+- `Artemis-tools-skill` 提交 `67a993e` 编写八份正文、16 份包内参考和固定源码依据，包含输入、参数选择、输出解释、错误处理与一次补试上限；未复制社区候选。
+- 八项通过 `skill-creator` 元数据检查和 `validate_skills.py` 包内引用、版本、固定源码摘要及示例选项检查；34 个本地文档链接、JSON 和 actionlint 检查通过。
+- 使用主程序锁定的 Norma v0.4.3 `skill.LoadDir` 加载八个实际目录，再逐项通过 `Registry.Tool().Call` 验证指导消息实际注入；八项通过，不连接数据库或执行扫描器。
+- [双架构 CI](https://github.com/x0rz4/Artemis-tools-skill/actions/runs/38197253177) 在提交 `e64f769` 通过：固定 Registry 下载锁，Linux amd64 八项、arm64 七项的二进制校验与帮助运行，示例选项均被识别。kscan 保持 amd64 支持限制。
+- 首次 CI 因原规划记录了 Windows 工作区换行字节摘要而失败；修正为固定提交的 Git blob 摘要后重跑通过，锁文件 JSON 内容相同。
+- 结果结构由固定源码核验：JSONL、ffuf 完整对象、fscan 分类对象、kscan 数组分别说明。真实输出样本、目标扫描、运行时工具调用适配及 Registry 发布未在本阶段执行，不把源码或帮助检查声称为端到端通过。
 
 ## 收尾
 
-本变更按用户“规划”请求保留 draft，不提前合并进现行能力规范。主仓库已实现的工具安装与云更新由独立提交记录；本规划另行提交。详细来源和后续任务以新仓库维护文档为入口。
+本变更按用户进一步授权进入 implementing；八份正文及引用已编写，输出样本、Registry 接入和定时发现尚未完成，整体变更暂不归档。主仓库已实现的工具安装与云更新由独立提交记录；详细来源和后续任务以新仓库维护文档为入口。
 
 独立公开仓库：[Artemis-tools-skill](https://github.com/x0rz4/Artemis-tools-skill)，初始文档提交 `e0d9356`；维护入口为 [MAINTENANCE.md](https://github.com/x0rz4/Artemis-tools-skill/blob/main/MAINTENANCE.md)。工具安装与云更新实现记录于 Artemis 提交 `762eda4`。
