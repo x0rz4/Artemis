@@ -1755,3 +1755,67 @@ export interface LibraryUpdateState {
     assets: { platform: string }[];
   }[];
 }
+
+// ---- 机密库 (secret vault) ----
+// 列表与详情只回显掩码；明文仅在 reveal 接口的响应里出现。
+export type SecretKind =
+  | "api_key"
+  | "password"
+  | "token"
+  | "cookie"
+  | "certificate"
+  | "private_key"
+  | "connection_string"
+  | "other";
+
+export type SecretAction = "create" | "read" | "reveal" | "update" | "delete" | "link" | "unlink";
+
+export type SecretLinkTarget = "task" | "asset" | "finding" | "company" | "host" | "conversation";
+
+export interface SecretLink {
+  id: number;
+  secret_id: number;
+  target_type: SecretLinkTarget;
+  target_ref: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface Secret {
+  id: number;
+  name: string;
+  kind: SecretKind;
+  value: string; // 掩码值，如 "__masked__:…ab12cd"；永不含明文
+  value_hint: string;
+  source: string;
+  source_task_id?: number | null;
+  host: string;
+  company_id?: number | null;
+  notes: string;
+  metadata?: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string | null;
+  link_count: number;
+  links?: SecretLink[];
+}
+
+export interface SecretAccess {
+  id: number;
+  secret_id?: number | null;
+  secret_name: string;
+  action: SecretAction;
+  actor: string;
+  actor_kind: "user" | "agent";
+  task_id?: number | null;
+  session_id: string;
+  reason: string;
+  created_at: string;
+}
+
+export interface SecretsMeta {
+  kinds: SecretKind[];
+  link_types: SecretLinkTarget[];
+  masked_prefix: string;
+}

@@ -74,6 +74,11 @@ import type {
   NotificationMeta,
   PromptVar,
   PromptVersion,
+  Secret,
+  SecretAccess,
+  SecretKind,
+  SecretLinkTarget,
+  SecretsMeta,
   SessionTokenUsage,
   Settings,
   Severity,
@@ -888,6 +893,51 @@ export const api = {
     ).then((r) => ({ ...r, deliveries: arr(r.deliveries) }));
   },
   notifyRetryDelivery: (id: number) => post<{ ok: boolean }>(`/notify/deliveries/${id}/retry`),
+
+  // ---- 机密库 (secret vault) ----
+  // 列表与详情只返回掩码；明文必须走 reveal 且带 reason（服务端写审计）。
+  secretsMeta: () => get<SecretsMeta>(`/secrets/meta`),
+  secrets: (q: { q?: string; kind?: string; host?: string; task_id?: number; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (q.q) p.set("q", q.q);
+    if (q.kind) p.set("kind", q.kind);
+    if (q.host) p.set("host", q.host);
+    if (q.task_id) p.set("task_id", String(q.task_id));
+    if (q.limit) p.set("limit", String(q.limit));
+    const qs = p.toString();
+    return get<{ secrets: Secret[] }>(`/secrets${qs ? `?${qs}` : ""}`).then((r) => arr(r.secrets));
+  },
+  secret: (id: number) => get<{ secret: Secret }>(`/secrets/${id}`).then((r) => r.secret),
+  createSecret: (payload: {
+    name: string;
+    kind: SecretKind;
+    value: string;
+    host?: string;
+    notes?: string;
+    source?: string;
+    links?: { target_type: SecretLinkTarget; target_ref: string }[];
+  }) => post<{ id: number; created: boolean; value_mask: string }>(`/secrets`, payload),
+  // 局部更新。替换凭据值必须同时传 replace_value=true；掩码值会被服务端拒绝。
+  updateSecret: (
+    id: number,
+    payload: {
+      name?: string;
+      kind?: SecretKind;
+      host?: string;
+      notes?: string;
+      source?: string;
+      value?: string;
+      replace_value?: boolean;
+    },
+  ) => patch<{ ok: boolean }>(`/secrets/${id}`, payload),
+  deleteSecret: (id: number) => del<{ deleted: number }>(`/secrets/${id}`),
+  revealSecret: (id: number, reason: string) =>
+    post<{ id: number; name: string; kind: SecretKind; value: string }>(`/secrets/${id}/reveal`, { reason }),
+  secretAccess: (id: number, limit = 100) =>
+    get<{ access: SecretAccess[] }>(`/secrets/${id}/access?limit=${limit}`).then((r) => arr(r.access)),
+  addSecretLink: (id: number, target_type: SecretLinkTarget, target_ref: string) =>
+    post<{ created: boolean }>(`/secrets/${id}/links`, { target_type, target_ref }),
+  removeSecretLink: (id: number, linkId: number) => del<{ ok: boolean }>(`/secrets/${id}/links/${linkId}`),
   report: async (task?: string) => {
     const token = getToken();
     const r = await fetch(`/api/report${tq(task)}`, {

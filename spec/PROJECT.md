@@ -31,6 +31,7 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 | 官方云更新 | `server/registry.go`（固定索引、清单、后台检查）、`server/registry_install.go`（选择安装、活动门禁）、`web/src/components/library-updates.tsx`；发布源码在独立公开仓库 `x0rz4/Artemis-registry` |
 | 技能库 | `server/skillsrc.go`（多扫描根 + 源同步）、`server/server_mgmt.go` 的 `fs*Skill*`、`web/src/app/(main)/system/skills/_components/skill-sources.tsx` |
 | 观测与日志 | `logging/logging.go`（结构化入口与字段约定）、`server/logsink.go`（文本契约、入库与 SSE）、`web/src/app/(main)/system/logs/page.tsx` |
+| 机密库 | `secret/secret.go`（类型、掩码、指纹）、`db/secrets.go`（存储/关联/审计）、`server/secrets_api.go`（接口与 Agent 工具）、`web/src/app/(main)/system/secrets/page.tsx` |
 
 提示词种子只初始化空版本；更新默认提示词需对应迁移标记，保留用户定制。外部 Agent SDK norma 版本见 `go.mod`，按准 vendored 依赖维护：升级必须显式改 `go.mod` 并跑通构建与 CI，不假设上游同步；不把它的源码复制进树（模块不带许可证文件）；上游或代理不可用时用自有 fork 加 `replace` 指向同一版本恢复，不就地改依赖源码。核验仍可取用：把 `GOMODCACHE` 指向空目录后执行 `go mod download github.com/Autumn-27/norma`。
 
@@ -54,7 +55,8 @@ Go 后端、PostgreSQL、Next.js 静态前端。产品命名与兼容标识见 [
 - **拦截 fail-closed**：拦截器读规则失败时不当作"未命中"，而是转人工确认（60 秒超时、超时拒绝）；读管控工具集失败时回落到内置默认集；人工审批超时默认拒绝；模型兜底审批失败默认拒绝（可在「系统 → 命令拦截」显式放宽为 allow/ask）。拦截器未接线（nil）时按"规则禁用"放行——这是刻意行为，接线点在 `server/manager.go`。
 - **凭据与密钥**：JWT 签名密钥随机生成、权限 0600（Unix），放在独立目录或卷；`.env` 与 `config.json` 由安装器以 0600 创建；数据库密码随机生成且不打印；仓库不预置默认密码、API Key 或演示账号。
 - **备份**：备份脚本只从环境变量读口令，默认不包含本地 `config.json` 与 JWT 密钥——要保留登录态就得显式指定，否则恢复后必须重新登录。
-- 已知未覆盖：Windows 发行包没有 0600 语义（依赖用户目录 ACL）；`data/` 与流量录制树（含 MITM CA 私钥）按 0755 创建，多用户主机上同机其他用户可读；流量代理端口本身无鉴权，只靠默认回环绑定约束。
+- **机密库**：`secrets.value` 当前按用户明确选择**明文存储**（列表与详情只回显掩码）；`/api/secrets*` 全部经过 JWT；明文只能通过 reveal 取得，且必须提供原因并写 `secret_access_log`；服务端日志只记 id/动作/操作者/任务，绝不记明文。取用后的明文会进入当次 run 的工具结果与 `data/transcripts/`，这是取用能力的固有泄漏面。
+- 已知未覆盖：Windows 发行包没有 0600 语义（依赖用户目录 ACL）；`data/` 与流量录制树（含 MITM CA 私钥）按 0755 创建，多用户主机上同机其他用户可读；流量代理端口本身无鉴权，只靠默认回环绑定约束；机密库明文随数据库备份与 `pg_dump` 一并导出。
 
 ## 工具库（data/tools）
 

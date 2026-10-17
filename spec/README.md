@@ -34,6 +34,7 @@
 - [备份与恢复](specs/backup-restore/spec.md)：离线加密备份、隔离恢复到空库空目录、迁移状态。
 - [基线工具安装](specs/baseline-tool-install/spec.md)：固定工具下载、校验、离线清单合并及安装入口。
 - [工具库与 Skill 云更新](specs/cloud-library-updates/spec.md)：官方独立发布、后台检查、选择安装、冲突与回滚。
+- [机密库](specs/secret-vault/spec.md)：任务发现凭据的集中存储、关联、掩码回显与受审计取用。
 
 其余业务能力尚未逐项建立 SPEC。现有约束先以 PROJECT.md 为准；首次改动某能力时，阅读代码与测试补充涉及的现行行为，并区分已验证事实与待确认问题，不虚构完整覆盖。
 
@@ -42,3 +43,5 @@
 ## 进行中的变更
 
 - [工具使用 Skill 维护](changes/tool-usage-skills/change.md)：独立 `Artemis-tools-skill` 仓库已编写八项工具指导与验证入口，Registry 接入、输出样本和定时发现继续实施；尚未发布这八项 Skill 的云更新包。
+- [机密库](changes/secret-vault/change.md)：Agent 发现凭据的集中存储、任务/资产关联、掩码接口与受审计取用；加密存储与现有平台凭据迁移留待后续变更。
+- [GHCR 镜像与一键安装](changes/ghcr-container-install/change.md)：源码镜像、双架构发布与安装脚本；等待真实容器验收。

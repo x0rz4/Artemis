@@ -1455,3 +1455,62 @@ CREATE TABLE IF NOT EXISTS migration_health (
  error TEXT NOT NULL DEFAULT '',
  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =====================================================================
+-- 机密库（secret-vault）
+-- 集中保存任务中发现的 key / 密码 / token 等凭据，并记录来源、关联与访问审计。
+-- 第一阶段按用户明确选择采用明文存储；列表与详情接口只回显掩码。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS secrets (
+    id             BIGSERIAL PRIMARY KEY,
+    name           TEXT NOT NULL,
+    kind           TEXT NOT NULL DEFAULT 'other'
+                   CHECK (kind IN ('api_key','password','token','cookie','certificate','private_key','connection_string','other')),
+    value          TEXT NOT NULL,
+    value_hint     TEXT NOT NULL DEFAULT '',
+    fingerprint    TEXT NOT NULL UNIQUE,
+    source         TEXT NOT NULL DEFAULT '',
+    source_task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    host           TEXT NOT NULL DEFAULT '',
+    company_id     BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    notes          TEXT NOT NULL DEFAULT '',
+    metadata       JSONB NOT NULL DEFAULT '{}',
+    created_by     TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_secrets_kind ON secrets(kind);
+CREATE INDEX IF NOT EXISTS idx_secrets_source_task ON secrets(source_task_id);
+CREATE INDEX IF NOT EXISTS idx_secrets_host ON secrets(host);
+CREATE INDEX IF NOT EXISTS idx_secrets_updated ON secrets(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS secret_links (
+    id          BIGSERIAL PRIMARY KEY,
+    secret_id   BIGINT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+    target_type TEXT NOT NULL
+                CHECK (target_type IN ('task','asset','finding','company','host','conversation')),
+    target_ref  TEXT NOT NULL,
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (secret_id, target_type, target_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_secret_links_target ON secret_links(target_type, target_ref);
+CREATE INDEX IF NOT EXISTS idx_secret_links_secret ON secret_links(secret_id);
+
+-- 访问审计：secret_id 允许为空，删除凭据后仍保留 secret_name 以便追溯。
+CREATE TABLE IF NOT EXISTS secret_access_log (
+    id          BIGSERIAL PRIMARY KEY,
+    secret_id   BIGINT REFERENCES secrets(id) ON DELETE SET NULL,
+    secret_name TEXT NOT NULL DEFAULT '',
+    action      TEXT NOT NULL
+                CHECK (action IN ('create','read','reveal','update','delete','link','unlink')),
+    actor       TEXT NOT NULL DEFAULT '',
+    actor_kind  TEXT NOT NULL DEFAULT 'user' CHECK (actor_kind IN ('user','agent')),
+    task_id     BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    session_id  TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_secret_access_secret ON secret_access_log(secret_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_secret_access_created ON secret_access_log(created_at DESC);

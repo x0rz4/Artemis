@@ -41,6 +41,7 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools := append(s.m.HostTools(), s.orchestrationTools()...)
 	tools = append(tools, s.findingRetestTools()...)
 	tools = append(tools, s.platformTools()...) // 平台操作工具(建改 skill/工具/MCP，给 Auto 用)
+	tools = append(tools, s.secretTools()...)   // 机密库：存储/检索/受审计取用
 	custom, err := s.customTools()
 	if err != nil {
 		log.Printf("[custom-tool] 加载失败: %v", err)
@@ -486,6 +487,7 @@ func (s *Server) seedOrchestrationTools() {
 		schema, _ := json.Marshal(t.InputSchema())
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, autoAgents)
 	}
+	s.seedSecretTools()
 	s.refreshBuiltinToolSchemas()
 	s.seedAutoDefaultBindings()
 	s.seedPlannerDefaultBindings()
